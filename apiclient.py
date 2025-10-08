@@ -3,14 +3,9 @@ import sys
 import argparse
 import httpx
 import json
-
+from cifrado import descifrar
 
 API_URL = "http://0.0.0.0:9043"
-
-def get_db_path():
-    if os.getenv("TEMPOFTP_SIMULACRO") == "1":
-        return "tempoftp_simulacro.db"
-    return "tempoftp.db"
 
 class APIClient:
     def __init__(self, api_url=API_URL):
@@ -35,7 +30,14 @@ class APIClient:
 
     def get_tmpftp_status(self, id):
         r = self.client.get(f"{self.api_url}/tmpftp/{id}")
-        print(r.status_code, r.json())
+        data = r.json()
+        if r.status_code == 200 and data.get("status") == "listo":
+            try:
+                data["password"] = descifrar(data["password"])
+            except Exception:
+                data["password"] = "ERROR: No se pudo descifrar la contraseña. Verifique la ENCRYPTION_KEY."
+        
+        print(r.status_code, data)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CLI para simular solicitudes a tempoftp API")

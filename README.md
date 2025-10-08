@@ -1,14 +1,69 @@
 # tempoftp
 
-Sistema para crear cuentas temporales de usuario para descargar datos por FTP.
+Sistema para crear cuentas temporales de usuario para descargar datos vía FTP.
 
 ## Descripción
 
-Este servicio, construido con FastAPI, permite la creación de cuentas temporales para descargar datos vía FTP, gestionando el acceso y almacenamiento mediante interacción con Pure-FTPd y bases de datos MySQL y SQLite.
+Este servicio, construido con FastAPI, expone una API para la creación de cuentas FTP temporales. Gestiona el ciclo de vida de las solicitudes, la creación de usuarios en Pure-FTPd (a través de una base de datos MySQL) y el registro de estados en una base de datos SQLite.
 
 ## Características
 
 - Endpoints para estado del servicio, salud y gestión de cuentas FTP temporales.
-- Integración con Pure-FTPd y base MySQL.
+- Arquitectura desacoplada con un gestor real (`GestorFTP`) y un simulador (`GestorFTPsim`).
+- Integración con Pure-FTPd a través de una base de datos MySQL.
 - Manejo de solicitudes, almacenamiento temporal y eliminación automática por vigencia.
-- Uso de SQLite para registro de solicitudes.
+- Uso de SQLite para registro de estados de cada solicitud.
+- Generación de contraseñas criptográficamente seguras.
+
+## Instalación
+
+1.  Clona el repositorio.
+2.  Crea y activa un entorno virtual:
+    ```bash
+    python -m venv .venv
+    source .venv/bin/activate
+    ```
+3.  Instala las dependencias:
+    ```bash
+    pip install fastapi uvicorn cryptography aiomysql pytest httpx
+    ```
+
+## Configuración
+
+El servicio se configura mediante variables de entorno.
+
+### Clave de Cifrado (`TEMPOFTP_ENCRYPTION_KEY`)
+
+Esta variable es **crítica** para la seguridad. Contiene la clave secreta utilizada para cifrar y descifrar las contraseñas de los usuarios FTP. Debe ser la misma en el servidor y en cualquier cliente que necesite interpretar la contraseña.
+
+1.  **Generar una clave segura**:
+    ```bash
+    pip install cryptography
+    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    ```
+
+2.  **Configurar la variable de entorno**: Antes de ejecutar el servidor o el cliente, exporta la clave generada.
+    ```bash
+    export TEMPOFTP_ENCRYPTION_KEY="tu_clave_generada_aqui"
+    ```
+
+### Modo Simulación (`TEMPOFTP_SIMULACRO`)
+
+Para desarrollo y pruebas locales, puedes ejecutar el servicio en modo simulación. En este modo, no se realizan operaciones reales en el sistema (como crear usuarios en MySQL o copiar archivos con `rsync`).
+
+```bash
+export TEMPOFTP_SIMULACRO=1
+```
+
+## Uso del Cliente (`apiclient.py`)
+
+El cliente `apiclient.py` interactúa con la API. Cuando se consulta el estado de una solicitud y esta se encuentra en estado `"listo"`, la API devuelve la contraseña cifrada.
+
+El cliente **descifra automáticamente la contraseña** si la variable de entorno `TEMPOFTP_ENCRYPTION_KEY` está configurada correctamente.
+
+**Ejemplo de consulta de estado:**
+```bash
+# El cliente se encarga de descifrar el campo "password"
+$ python apiclient.py --get proyecto_test_1
+200 {'status': 'listo', 'usuario': 'ftp_test.user_abcd', 'password': 'cleartextpassword123', 'mensaje': 'Listo, tiene 5 días para hacer la descarga.', 'vigencia': 5}
+```

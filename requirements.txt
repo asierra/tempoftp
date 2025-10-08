@@ -1,6 +1,7 @@
-fastapi
-uvicorn
 aiomysql
+cryptography
+fastapi
+httpx
 python-crontab
 pytest
-httpx
+uvicorn

@@ -1,19 +1,19 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
-from gestorftpsim import GestorFTP
-from gestorftpdb import GestorFTPDB
 import os
 
 app = FastAPI()
-gestorftpdb = None
+gestorftp = None
 
-# Detecta si está en entorno de test
-if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TEST_DB") == "1":
-    gestorftpdb = GestorFTPDB(db_path=':memory:')
-else:   
-    gestorftpdb = GestorFTPDB() 
-gestorftp = GestorFTP(gestorftpdb)
+# El gestor apropiado (real o simulado) se instancia.
+# Cada gestor es ahora responsable de su propia conexión a la base de datos.
+if os.getenv("TEMPOFTP_SIMULACRO") == "1" or os.getenv("PYTEST_CURRENT_TEST"):
+    from gestorftpsim import GestorFTPsim
+    gestorftp = GestorFTPsim()
+else:
+    from gestorftp import GestorFTP
+    gestorftp = GestorFTP()
 
 class TmpFTPRequest(BaseModel):
     usuario: str # <direccion email>
@@ -26,8 +26,8 @@ async def get_status():
     # Consulta el estado actual del servicio
     return {"status": "active"}
 
-@app.get("/health") # Corregido de /healt a /health
-async def get_healt():
+@app.get("/health")
+async def get_health():
     # Consulta el estado del servicio y recursos
     return {"status": "ok", "space": "20TB", "ftpd": "up", "database": "ok"}
 
@@ -37,7 +37,7 @@ async def create_tmpftp(req: TmpFTPRequest):
     # Por ahora, la simulación es síncrona.
     try:
         # El gestor inicia el proceso y devuelve una confirmación inmediata.
-        gestorftp.create_usertmp(req.id, req.usuario, req.ruta, req.vigencia)
+        await gestorftp.create_usertmp(req.id, req.usuario, req.ruta, req.vigencia)
         return {"id": req.id, "status": "recibido"}
     except Exception as e:
         # Captura errores iniciales, como espacio insuficiente.
@@ -46,7 +46,7 @@ async def create_tmpftp(req: TmpFTPRequest):
 @app.get("/tmpftp/{id}")
 async def get_tmpftp_status(id: str):
     # Consulta el estado de la solicitud por ID
-    result = gestorftp.get_status(id)
+    result = await gestorftp.get_status(id)
     if result:
         return result
     else:

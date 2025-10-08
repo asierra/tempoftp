@@ -9,3 +9,4 @@ instance/
 *.sqlite3
 .DS_Store
 *.log
+tempoftp_simulacro.db
