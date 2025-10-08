@@ -1,0 +1,6 @@
+{
+  "usuario": "test@example.com",
+  "id": "prueba1",
+  "ruta": "10.0.0.1:/data/source",
+  "vigencia": 5
+}

@@ -3,50 +3,72 @@ import random
 import string
 import subprocess
 import hashlib
+import time
 
 class GestorFTP:
+    def __init__(self):
+        self.requests = {}
+
     def generate_username(self, email):
         prefix = "ftp_"
         user_part = email.split("@")[0]
         random_word = ''.join(random.choices(string.ascii_lowercase, k=4))
         return f"{prefix}{user_part}_{random_word}"
 
-    def generate_password_hash(self, password):
-        return hashlib.sha512(password.encode()).hexdigest()
+    def generate_password(self):
+        # Genera una contraseña aleatoria
+        return ''.join(random.choices(string.ascii_letters + string.digits, k=12))
 
     def create_usertmp(self, id, email, ruta, vigencia):
+        # 1. Generar credenciales y establecer estado inicial
         username = self.generate_username(email)
-        password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-        password_hash = self.generate_password_hash(password)
+        password = self.generate_password()
+        # El hash SHA512 es compatible con pure-ftpd si se configura correctamente
+        password_hash = hashlib.sha512(password.encode()).hexdigest()
 
-        status = "preparando"
+        self.requests[id] = {"status": "recibido", "mensaje": "Solicitud en cola."}
+
+        # --- INICIO DE LA SIMULACIÓN DE PROCESO EN SEGUNDO PLANO ---
+        
+        # 2. Crear carpeta y verificar espacio
+        self.requests[id].update({"status": "preparando", "mensaje": "Creando entorno y verificando espacio."})
         base_dir = f"/data/{id}"
-        try:
-            os.makedirs(base_dir, exist_ok=True)
-            # Establecer permisos para pure-ftpd (requiere integración con sistema)
-            # subprocess.run(["chown", "pureftpd:pureftpd", base_dir])
+        print(f"SIMULACRO: Creando directorio {base_dir}")
+        # Lógica real: os.makedirs(base_dir, exist_ok=True)
+        # Lógica real: subprocess.run(["chown", "pureftpd:pureftpd", base_dir])
 
-            # Confirmar espacio usando 'rsync --dry-run' u otro método
-            # Aquí simulado: espacio_suficiente = True
-            espacio_suficiente = True
-            if not espacio_suficiente:
-                return {"id": id, "status": "error", "mensaje": "Espacio insuficiente"}
-            
-            # Copiar datos con rsync
-            # subprocess.run(["rsync", "-av", ruta, base_dir])
-            status = "traslado"
+        # 3. Simular la comprobación de espacio y la copia con rsync
+        print(f"SIMULACRO: Verificando espacio para copiar desde {ruta}")
+        # Lógica real: usar `rsync --dry-run -n` o `ssh user@host 'du -sh /path'` para obtener tamaño
+        espacio_suficiente = random.choice([True, True, False]) # Simula que a veces no hay espacio
+        if not espacio_suficiente:
+            error_msg = "Espacio insuficiente"
+            self.requests[id].update({"status": "error", "mensaje": error_msg})
+            # En la implementación real, lanzaríamos una excepción aquí
+            raise Exception(error_msg)
 
-            # Crear usuario FTP en MySQL (usar aiomysql en producción)
-            # Simulado aquí
-            status = "ready"
-            mensaje = f"Listo, tiene {vigencia} días para hacer la descarga."
-            
-            # Programar crontab para eliminar usuario y carpeta tras la vigencia (simulado)
-            return {"id": id, "status": status, "mensaje": mensaje, "username": username, "password": password}
-        except Exception as e:
-            return {"id": id, "status": "error", "mensaje": str(e)}
+        self.requests[id].update({"status": "traslado", "mensaje": f"Copiando datos desde {ruta} a {base_dir}."})
+        print(f"SIMULACRO: Ejecutando rsync -av {ruta} {base_dir}")
+        time.sleep(2) # Simula el tiempo de copia
+        print("SIMULACRO: Copia finalizada.")
+
+        # 4. Crear usuario en la BD y actualizar estado a "listo"
+        print(f"SIMULACRO: Creando usuario {username} en la base de datos MySQL de pure-ftpd.")
+        # Lógica real: Conectar a MySQL y ejecutar:
+        # INSERT INTO users (User, Password, Uid, Gid, Dir, ...) VALUES (%s, %s, ...);
+        
+        mensaje_listo = f"Listo, tiene {vigencia} días para hacer la descarga. Usuario: {username}, Contraseña: {password}"
+        self.requests[id].update({"status": "listo para descarga", "mensaje": mensaje_listo})
+        
+        # 5. Programar la eliminación con cron
+        print(f"SIMULACRO: Programando cron para eliminar al usuario {username} y la carpeta {base_dir} en {vigencia} días.")
+        # Lógica real: usar una librería como `python-crontab`
+        # from crontab import CronTab
+        # cron = CronTab(user='root')
+        # job = cron.new(command=f'/usr/bin/python3 /path/to/cleanup_script.py --id {id}')
+        # job.setall(datetime.now() + timedelta(days=vigencia))
+        # cron.write()
 
     def get_status(self, id):
-        # Consultar estado en la base SQLite (simulado)
-        # Retornar estado de ejemplo
-        return {"id": id, "status": "preparando", "mensaje": "En proceso"}
+        # Consulta el estado de la solicitud desde nuestro almacén en memoria
+        return self.requests.get(id)
