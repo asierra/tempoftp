@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+aiomysql
+sqlite3
+python-crontab
+rsync
