@@ -1,8 +1,10 @@
+
+import os
+os.environ["TEMPOFTP_SIMULACRO"] = "1"
 import pytest
 from fastapi.testclient import TestClient
 from main import app, gestorftp
 from cifrado import descifrar, ENCRYPTION_KEY
-import os
 
 # Asegurarnos de que las pruebas usen la misma clave de cifrado
 os.environ["TEMPOFTP_ENCRYPTION_KEY"] = ENCRYPTION_KEY
@@ -60,7 +62,7 @@ def test_create_and_get_status_success(client, monkeypatch):
     assert get_response.status_code == 200
     data = get_response.json()
     assert data["status"] == "listo"
-    assert "usuario" in data
+    assert "ftpuser" in data
     assert "password" in data
     assert descifrar(data["password"]) # Verificamos que se pueda descifrar
 

@@ -101,7 +101,7 @@ class GestorFTP(GestorFTPBase):
         password_cifrada = cifrar(password)
         info = {
             "usuario": username,
-            "password_cifrada": password_cifrada,
+            "password": password_cifrada,
             "ruta": ruta,
             "vigencia": vigencia
         }

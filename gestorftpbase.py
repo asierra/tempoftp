@@ -35,8 +35,20 @@ class GestorFTPBase:
         """Obtiene el estado de una solicitud desde la base de datos."""
         solicitud = self.db.obtener_solicitud(id)
         if solicitud:
-            if solicitud["estado"] == "listo":
-                return {"status": "listo", **solicitud["info"]}
+            estado = solicitud["estado"]
+            info = solicitud["info"]
+            # Si el estado es 'listo' o 'listo para descarga', normaliza a 'listo' y extrae ftpuser y password
+            if estado in ["listo", "listo para descarga"]:
+                return {
+                    "status": "listo",
+                    "ftpuser": info.get("usuario"),
+                    "password": info.get("password"),
+                    "vigencia": info.get("vigencia"),
+                    "mensaje": info.get("mensaje", "")
+                }
             else:
-                return {"status": solicitud["estado"], "mensaje": solicitud["info"].get("mensaje", "")}
+                return {
+                    "status": estado,
+                    "mensaje": info.get("mensaje", "")
+                }
         return None

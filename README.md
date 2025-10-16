@@ -15,6 +15,84 @@ Este servicio, construido con FastAPI, expone una API para la creación de cuent
 - Uso de SQLite para registro de estados de cada solicitud.
 - Generación de contraseñas criptográficamente seguras.
 
+## Documentación de la API
+
+### Endpoints principales
+
+#### 1. Estado del servicio
+**GET /**
+Respuesta:
+```json
+{
+    "status": "active"
+}
+```
+
+#### 2. Salud del servicio
+**GET /health**
+Respuesta:
+```json
+{
+    "status": "ok",
+    "space": "20TB",
+    "ftpd": "up",
+    "database": "ok"
+}
+```
+
+#### 3. Crear solicitud FTP temporal
+**POST /tmpftp**
+Cuerpo (JSON):
+```json
+{
+    "usuario": "test.user@example.com",
+    "id": "proyecto_test_1",
+    "ruta": "10.0.0.1:/data/source",
+    "vigencia": 5
+}
+```
+Respuesta exitosa:
+```json
+{
+    "id": "proyecto_test_1",
+    "status": "recibido"
+}
+```
+
+
+#### 4. Consultar estado de solicitud
+**GET /tmpftp/{id}**
+Respuesta (ejemplo exitoso):
+```json
+{
+    "status": "listo",
+    "ftpuser": "ftp_testuser_xxxx",
+    "password": "Abc123xyz...",  // Contraseña cifrada
+    "vigencia": 5,
+    "mensaje": "Listo, tiene 5 días para hacer la descarga."
+}
+```
+
+### Ejemplos de errores
+
+**Solicitud no encontrada:**
+```json
+{
+    "detail": "No encontrado"
+}
+```
+
+**Error por espacio insuficiente:**
+```json
+{
+    "detail": {
+        "id": "proyecto_test_2",
+        "status": "error",
+        "mensaje": "Espacio insuficiente"
+    }
+}
+```
+
 ## Instalación
 
 1.  Clona el repositorio.
