@@ -47,15 +47,119 @@ Este documento describe los pasos y componentes necesarios para implementar y pr
 - pure-ftpd y MySQL configurados
 - SQLite para estados temporales
 
-## 4. Recomendaciones para pruebas en entorno real
+## 4. Checklist para pruebas en entorno real
 
-- Realiza pruebas con archivos pequeños antes de transferencias grandes.
-- Verifica permisos de escritura en el disco destino.
-- Asegúrate de que rsync y pure-ftpd funcionen correctamente desde la línea de comandos.
-- Revisa los logs y estados en la base de datos para detectar errores.
-- Considera agregar notificaciones o webhooks para informar al usuario cuando la transferencia esté lista.
+### 4.1 Paquetes del sistema
 
-## 5. Ejemplo de flujo asíncrono (pseudocódigo)
+- rsync, openssh-client
+- pure-ftpd con soporte MySQL (pure-ftpd-mysql)
+- MySQL/MariaDB (o acceso a uno existente)
+- Python 3.11+ y pip
+
+### 4.2 Usuarios, permisos y directorios
+
+- Usuario/grupo para FTP coherente con pure-ftpd
+   - El código usa Uid/Gid=2001 y chown a `pureftpd:pureftpd` por defecto.
+   - Asegura que existan UID/GID 2001, o ajusta el código/variables si tu instalación usa otros.
+- Directorio destino: `/data`
+   - Crear y asignar propiedad a `pureftpd:pureftpd`.
+
+### 4.3 Base de datos (Pure-FTPd + MySQL)
+
+- BD y usuario con permisos para INSERT en tabla de usuarios.
+- Tabla mínima compatible:
+
+   ```sql
+   CREATE TABLE users (
+      User VARCHAR(64) PRIMARY KEY,
+      Password VARCHAR(64) NOT NULL,
+      Uid INT NOT NULL,
+      Gid INT NOT NULL,
+      Dir VARCHAR(255) NOT NULL,
+      Status TINYINT NOT NULL DEFAULT 1
+   );
+   ```
+
+- Asegúrate que la configuración de pure-ftpd (mysql.conf) mapea a estas columnas.
+
+### 4.4 SSH/rsync hacia el origen
+
+- La verificación de tamaño remoto (du -sb) y rsync usan usuario fijo `lanotadm`.
+- Si necesitas otro usuario, exporta `RSYNC_SSH_USER` en el entorno del servicio.
+- Configurar autenticación por llave para:
+   - `ssh lanotadm@host "du -sb /ruta"`
+   - `rsync -av lanotadm@host:/ruta /data/usuario/id`
+
+### 4.5 Variables de entorno
+
+- `TEMPOFTP_SIMULACRO=0`
+- `FTP_DB_HOST, FTP_DB_PORT, FTP_DB_USER, FTP_DB_PASS, FTP_DB_NAME`
+- Opcional: `RSYNC_SSH_USER` para reemplazar `lanotadm`.
+
+### 4.6 Ejecución de la API
+
+- Instalar dependencias Python: `pip install -r requirements.txt`
+- Ejecutar con un solo worker para evitar duplicación de tareas en background:
+   - `uvicorn main:app --host 0.0.0.0 --port 9043 --workers 1`
+
+## 5. Prueba de humo
+
+1. POST `/tmpftp` con body:
+
+    ```json
+    {
+       "usuario": "alguien@dominio",
+       "id": "proyecto_real_1",
+       "ruta": "lanotadm@host:/ruta/origen",
+       "vigencia": 3
+    }
+    ```
+
+    Respuesta esperada: `{ "id": "proyecto_real_1", "status": "recibido" }`.
+
+2. GET `/tmpftp/proyecto_real_1` cada 3–5 s.
+    - Estados: `recibido` → `preparando` → `traslado` → `listo` (o `error`).
+
+3. Verificar acceso FTP
+    - Usuario: `usuario` del JSON de estado.
+    - Password: cifrada en JSON (la real quedó en MySQL).
+    - Homedir: `/data/{usuario}` con datos en subcarpeta `{id}`.
+
+## 6. Notas y problemas comunes
+
+- Coherencia de UID/GID y propietario; si pure-ftpd usa otros valores, ajusta el INSERT y el chown.
+- Permisos: el proceso de la API debe poder hacer chown en `/data`.
+- Firewall: abrir puerto 9043 para la API y el rango pasivo de FTP.
+- Concurrencia: usar `--workers 1` mientras las tareas corren en el event loop.
+- Logs y diagnóstico: considerar logs por solicitud en el directorio de la solicitud.
+
+## 6.1 Despliegue con systemd
+
+1. Copiar el repositorio a `/opt/tempoftp` (o ajustar `WorkingDirectory` en el servicio).
+2. Copiar el servicio y configurar variables:
+
+   - Servicio:
+     - `deploy/tempoftp.service` → `/etc/systemd/system/tempoftp.service`
+   - Variables de entorno (elige según distro):
+     - `deploy/tempoftp.env.example` → `/etc/default/tempoftp` (Debian/Ubuntu)
+     - o `deploy/tempoftp.env.example` → `/etc/sysconfig/tempoftp` (RHEL/CentOS)
+
+3. Recargar systemd y habilitar servicio:
+
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable tempoftp
+   sudo systemctl start tempoftp
+   sudo systemctl status tempoftp --no-pager
+   ```
+
+4. Logs del servicio:
+
+   ```bash
+   journalctl -u tempoftp -f -n 200
+   ```
+
+## 7. Ejemplo de flujo asíncrono (pseudocódigo)
 
 ```python
 from fastapi import BackgroundTasks
@@ -67,7 +171,7 @@ async def create_tmpftp(req: TmpFTPRequest, background_tasks: BackgroundTasks):
     return {"id": req.id, "status": "recibido"}
 ```
 
-## 6. Documentación adicional
+## 8. Documentación adicional
 
 - Detalla los endpoints y formatos de respuesta en el README principal.
 - Documenta los posibles estados y errores esperados.

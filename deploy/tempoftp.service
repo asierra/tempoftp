@@ -1,0 +1,31 @@
+[Unit]
+Description=tempoftp API (FastAPI + Uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+# Para las primeras pruebas, ejecutar como root simplifica permisos (chown en /data).
+# En producción, considerar un usuario dedicado + sudoers para chown.
+User=root
+Group=root
+
+# Directorio del proyecto (ajustar si se instala en otra ruta)
+WorkingDirectory=/opt/tempoftp
+
+# Cargar variables de entorno (Distro: Debian/Ubuntu usa /etc/default, RHEL/CentOS /etc/sysconfig)
+EnvironmentFile=-/etc/default/tempoftp
+EnvironmentFile=-/etc/sysconfig/tempoftp
+
+# Si usas venv, puedes exportar PATH en el EnvironmentFile, ej:
+# PATH=/opt/tempoftp/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+
+# Ejecutar Uvicorn con 1 worker (evita duplicar tareas en background)
+ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1
+
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

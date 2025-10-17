@@ -44,6 +44,37 @@ class FTPDB_MySQL:
                 await cur.execute(query, (user, password_md5, 2001, 2001, homedir, '1'))
 
 class GestorFTP(GestorFTPBase):
+    def obtener_tamano_remoto(self, ruta_remota: str, usuario_ssh: str = None, host_ssh: str = None) -> int:
+        """Obtiene el tamaño en bytes de una ruta remota usando SSH y du -sb.
+        Siempre usa el usuario 'lanotadm' (o RSYNC_SSH_USER si está definido),
+        ignorando el usuario que pueda venir en la ruta."""
+        import subprocess, os
+        # Si la ruta es del tipo usuario@host:/ruta, extrae usuario y host
+        if ':' in ruta_remota:
+            hostinfo, path = ruta_remota.split(':', 1)
+            if '@' in hostinfo:
+                _, host_ssh = hostinfo.split('@', 1)
+            else:
+                host_ssh = hostinfo
+            ruta = path
+        else:
+            ruta = ruta_remota
+        if not host_ssh:
+            raise Exception("No se pudo determinar el host remoto para SSH")
+        # Forzar usuario fijo: RSYNC_SSH_USER si está seteado, si no 'lanotadm'
+        ssh_user = os.getenv("RSYNC_SSH_USER") or "lanotadm"
+        ssh_cmd = ["ssh", f"{ssh_user}@{host_ssh}", f"du -sb '{ruta}' | cut -f1"]
+        try:
+            result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=True)
+            size_str = result.stdout.strip().splitlines()[0]
+            return int(size_str)
+        except Exception as e:
+            raise Exception(f"Error al obtener tamaño remoto: {e}")
+    def verificar_espacio_data(self, minimo_bytes: int = 1_000_000_000) -> bool:
+        """Verifica si hay al menos 'minimo_bytes' libres en /data."""
+        import shutil
+        usage = shutil.disk_usage('/data')
+        return usage.free >= minimo_bytes
     def __init__(self):
         # El gestor real ahora controla su propia instancia de DB de solicitudes (SQLite)
         # y la de usuarios de FTP (MySQL).
@@ -53,14 +84,20 @@ class GestorFTP(GestorFTPBase):
             self.db = TMPFTPdb() # Usa la ruta por defecto 'tempoftp.db'
         self.db_mysql = FTPDB_MySQL()
 
-    def _preparar_directorio(self, id: str) -> str:
-        """Crea el directorio de destino para el usuario y asigna permisos."""
-        base_dir = f"/data/{id}"
-        print(f"REAL: Creando directorio {base_dir}")
-        # En un entorno real, se ejecutarían los siguientes comandos:
-        # os.makedirs(base_dir, exist_ok=True)
-        # subprocess.run(["chown", "pureftpd:pureftpd", base_dir], check=True)
-        return base_dir
+    def _preparar_directorio(self, usuario: str, id: str) -> str:
+        """Crea el homedir del usuario si no existe y la subcarpeta para la solicitud."""
+        homedir = f"/data/{usuario}"
+        solicitud_dir = f"{homedir}/{id}"
+        print(f"REAL: Creando directorio {solicitud_dir}")
+        import os
+        # Crear homedir si no existe
+        if not os.path.exists(homedir):
+            os.makedirs(homedir, exist_ok=True)
+            subprocess.run(["chown", "pureftpd:pureftpd", homedir], check=True)
+        # Crear subcarpeta para la solicitud
+        os.makedirs(solicitud_dir, exist_ok=True)
+        subprocess.run(["chown", "pureftpd:pureftpd", solicitud_dir], check=True)
+        return solicitud_dir
 
     def _verificar_espacio(self, ruta: str) -> bool:
         """Simula la verificación de espacio disponible antes de la copia."""
@@ -92,10 +129,10 @@ class GestorFTP(GestorFTPBase):
             raise Exception("Error: El comando 'rsync' no se encuentra en el sistema.")
 
     async def create_usertmp(self, id, email, ruta, vigencia):
-        # 0. Verificar si la solicitud ya existe (lógica en la clase base)
+        # 0. Verificar duplicados
         self._verificar_solicitud_duplicada(id)
 
-        # 1. Generar credenciales y establecer estado inicial
+        # 1. Generar credenciales y estado inicial
         username = self.generate_username(email)
         password = self.generate_password()
         password_cifrada = cifrar(password)
@@ -106,41 +143,53 @@ class GestorFTP(GestorFTPBase):
             "vigencia": vigencia
         }
         self.db.crear_solicitud(id, email, ruta, "recibido", {**info, "mensaje": "Solicitud en cola."})
-        
-        try:
-            # 2. Crear carpeta y verificar espacio
-            self.db.actualizar_estado(id, "preparando", {**info, "mensaje": "Creando entorno y verificando espacio."})
-            base_dir = self._preparar_directorio(id)
 
-            if not self._verificar_espacio(ruta):
-                raise Exception("Espacio insuficiente")
+        import asyncio
 
-            # 3. Ejecutar la copia con rsync
-            self.db.actualizar_estado(id, "traslado", {**info, "mensaje": f"Copiando datos desde {ruta} a {base_dir}."})
-            self._ejecutar_rsync(ruta, base_dir)
-            print(f"REAL: Copia finalizada.")
+        async def proceso_copia():
+            # Pool MySQL aislado por tarea para evitar condiciones de carrera
+            local_mysql = FTPDB_MySQL()
+            try:
+                # 2. Verificar espacio y crear carpeta
+                self.db.actualizar_estado(id, "preparando", {**info, "mensaje": "Creando entorno y verificando espacio."})
+                tamano_remoto = self.obtener_tamano_remoto(ruta)
+                if not self.verificar_espacio_data(tamano_remoto):
+                    raise Exception(f"Espacio insuficiente en /data: se requieren {tamano_remoto} bytes")
+                base_dir = self._preparar_directorio(username, id)
 
-            # 4. Crear usuario en la BD de Pure-FTPd
-            print(f"REAL: Creando usuario {username} en la base de datos MySQL de pure-ftpd.")
-            await self.db_mysql.connect() # Conectamos el pool
-            await self.db_mysql.crear_usuario_ftp(username, password, base_dir)
+                # 3. Ejecutar la copia con rsync
+                self.db.actualizar_estado(id, "traslado", {**info, "mensaje": f"Copiando datos desde {ruta} a {base_dir}."})
+                self._ejecutar_rsync(ruta, base_dir)
+                print("REAL: Copia finalizada.")
 
-        except Exception as e:
-            error_msg = str(e)
-            self.db.actualizar_estado(id, "error", {**info, "mensaje": error_msg})
-            raise Exception(error_msg)
-        finally:
-            # El pool de MySQL se cierra solo si se ha conectado
-            if self.db_mysql.pool:
-                await self.db_mysql.close()
+                # 4. Crear usuario en la BD de Pure-FTPd
+                print(f"REAL: Creando usuario {username} en la base de datos MySQL de pure-ftpd.")
+                await local_mysql.connect()
+                await local_mysql.crear_usuario_ftp(username, password, f"/data/{username}")
 
-        info_lista = {
+                info_lista = {
+                    "usuario": username,
+                    "password": password_cifrada,
+                    "mensaje": f"Listo, tiene {vigencia} días para hacer la descarga.",
+                    "vigencia": vigencia
+                }
+                self.db.actualizar_estado(id, "listo", info_lista)
+
+                # 5. Programar la eliminación con cron (pendiente de implementación real)
+                print(f"REAL: Programando cron para eliminar al usuario {username} y la carpeta {base_dir} en {vigencia} días.")
+            except Exception as e:
+                error_msg = str(e)
+                self.db.actualizar_estado(id, "error", {**info, "mensaje": error_msg})
+                print(f"ERROR en proceso_copia: {error_msg}")
+            finally:
+                if local_mysql.pool:
+                    await local_mysql.close()
+
+        # Lanzar la tarea en segundo plano y devolver inmediatamente
+        asyncio.create_task(proceso_copia())
+        return {
             "usuario": username,
             "password": password_cifrada,
-            "mensaje": f"Listo, tiene {vigencia} días para hacer la descarga.",
+            "mensaje": "Solicitud en proceso. Recibirá notificación cuando esté lista.",
             "vigencia": vigencia
         }
-        self.db.actualizar_estado(id, "listo", info_lista)
-        
-        # 5. Programar la eliminación con cron
-        print(f"REAL: Programando cron para eliminar al usuario {username} y la carpeta {base_dir} en {vigencia} días.")
