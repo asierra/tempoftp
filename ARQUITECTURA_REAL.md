@@ -177,6 +177,13 @@ async def create_tmpftp(req: TmpFTPRequest, background_tasks: BackgroundTasks):
 - Documenta los posibles estados y errores esperados.
 - Explica cómo configurar pure-ftpd y MySQL para integración.
 
+## Cambios recientes y advertencias
+
+- **Flujo idempotente de usuario FTP:** Si el usuario ya existe en la base de datos de pure-ftp, la API devuelve el hash cifrado de la contraseña existente. No se genera ni sobreescribe el password.
+- **Validación estricta de ruta remota:** El campo `ruta` debe ser del tipo `host:/ruta` o `usuario@host:/ruta`. Otros formatos serán rechazados.
+- **Pruebas y ejemplos:** Asegúrate de que todos los tests y ejemplos usen rutas válidas.
+- **No recuperación de password en claro:** Si el usuario ya existe, solo se puede obtener el hash cifrado, nunca el password original.
+
 ---
 
 Este documento puede ampliarse con ejemplos de configuración, scripts de automatización y recomendaciones de seguridad según avances en el entorno real.

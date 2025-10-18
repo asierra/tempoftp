@@ -7,11 +7,31 @@ class GestorFTPBase:
     Clase base con la lógica común para generar credenciales.
     """
     def generate_username(self, email: str) -> str:
-        """Genera un nombre de usuario único a partir de un email."""
+        """Genera un nombre de usuario determinista a partir de un email.
+        Regla: ftp_<parte_izq_de_@>_<primer_label_del_dominio>
+        Ej: danae@zaln.unam.mx -> ftp_danae_zaln
+        """
         prefix = "ftp_"
-        user_part = email.split("@")[0].replace(".", "_")
-        random_word = ''.join(random.choices(string.ascii_lowercase, k=4))
-        return f"{prefix}{user_part}_{random_word}"
+        try:
+            local, domain = email.split("@", 1)
+        except ValueError:
+            local, domain = email, ""
+
+        local = (local or "").strip().lower()
+        first_label = (domain or "").split(".", 1)[0].strip().lower() if domain else ""
+
+        # Normaliza a [a-z0-9_], sustituyendo separadores comunes por '_'
+        import re
+        def norm(s: str) -> str:
+            s = s.replace(".", "_").replace("-", "_").replace("+", "_")
+            s = re.sub(r"[^a-z0-9_]", "_", s)
+            s = re.sub(r"_+", "_", s).strip("_")
+            return s or "x"
+
+        user_part = norm(local)
+        domain_part = norm(first_label) if first_label else "x"
+
+        return f"{prefix}{user_part}_{domain_part}"
 
     def generate_password(self, length: int = 12) -> str:
         """Genera una contraseña aleatoria y segura."""
@@ -37,8 +57,8 @@ class GestorFTPBase:
         if solicitud:
             estado = solicitud["estado"]
             info = solicitud["info"]
-            # Si el estado es 'listo' o 'listo para descarga', normaliza a 'listo' y extrae ftpuser y password
-            if estado in ["listo", "listo para descarga"]:
+            # Si el estado es 'listo' extrae ftpuser y password
+            if estado == "listo":
                 return {
                     "status": "listo",
                     "ftpuser": info.get("usuario"),

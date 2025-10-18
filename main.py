@@ -2,6 +2,18 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
 import os
+import logging
+
+# --- Logging configuration ---
+LOG_LEVEL = os.getenv("TEMPOFTP_LOG_LEVEL", "INFO").upper()
+try:
+    _numeric_level = getattr(logging, LOG_LEVEL)
+except AttributeError:
+    _numeric_level = logging.INFO
+logging.basicConfig(
+    level=_numeric_level,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 
 app = FastAPI()
 gestorftp = None
@@ -53,4 +65,4 @@ async def get_tmpftp_status(id: str):
         raise HTTPException(status_code=404, detail="No encontrado")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=9043)          
+    uvicorn.run(app, host="0.0.0.0", port=9043, log_level=os.getenv("TEMPOFTP_LOG_LEVEL", "info").lower())          

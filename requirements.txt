@@ -5,3 +5,4 @@ httpx
 python-crontab
 pytest
 uvicorn
+passlib

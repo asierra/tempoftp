@@ -42,8 +42,8 @@ def test_get_tmpftp_status_not_found(client):
 
 def test_create_and_get_status_success(client, monkeypatch):
     """Prueba el flujo completo: crear una solicitud y verificar su estado final."""
-    # Forzamos a que la simulación de espacio siempre sea exitosa para esta prueba
-    monkeypatch.setattr("random.choice", lambda _: True)
+    # Forzar éxito determinista
+    monkeypatch.setenv("TEMPOFTP_SIM_FORCE", "ok")
 
     request_data = {
         "usuario": "test.user@example.com",
@@ -66,24 +66,30 @@ def test_create_and_get_status_success(client, monkeypatch):
     assert "password" in data
     assert descifrar(data["password"]) # Verificamos que se pueda descifrar
 
+    # limpiar
+    monkeypatch.delenv("TEMPOFTP_SIM_FORCE", raising=False)
+
 def test_create_fails_due_to_space(client, monkeypatch):
     """Prueba que la creación falla si no hay espacio suficiente."""
-    # Forzamos a que la simulación de espacio siempre falle
-    monkeypatch.setattr("random.choice", lambda _: False)
+    # Forzar fallo determinista en simulador
+    monkeypatch.setenv("TEMPOFTP_SIM_FORCE", "fail")
 
-    request_data = {"usuario": "fail.user@example.com", "id": "proyecto_test_2", "ruta": "...", "vigencia": 1}
+    request_data = {"usuario": "fail.user@example.com", "id": "proyecto_test_2", "ruta": "10.0.0.1:/data/source", "vigencia": 1}
     response = client.post("/tmpftp", json=request_data)
     assert response.status_code == 400
     assert response.json()["detail"] == {'id': 'proyecto_test_2', 'status': 'error', 'mensaje':  'Espacio insuficiente'}
 
+    # limpiar
+    monkeypatch.delenv("TEMPOFTP_SIM_FORCE", raising=False)
+
 def test_create_duplicate_id_fails(client, monkeypatch):
     """Prueba que no se puede crear una solicitud con un ID duplicado."""
-    monkeypatch.setattr("random.choice", lambda _: True)
+    monkeypatch.setenv("TEMPOFTP_SIM_FORCE", "ok")
 
     request_data = {
         "usuario": "duplicate.user@example.com",
         "id": "proyecto_duplicado",
-        "ruta": "...",
+        "ruta": "10.0.0.1:/data/source",
         "vigencia": 1
     }
 
@@ -95,3 +101,60 @@ def test_create_duplicate_id_fails(client, monkeypatch):
     response2 = client.post("/tmpftp", json=request_data)
     assert response2.status_code == 400
     assert "Ya existe una solicitud en proceso con el ID 'proyecto_duplicado'" in response2.json()["detail"]["mensaje"]
+
+    # limpiar
+    monkeypatch.delenv("TEMPOFTP_SIM_FORCE", raising=False)
+
+
+def test_sim_force_ok(client, monkeypatch):
+    """Forzar éxito con TEMPOFTP_SIM_FORCE=ok"""
+    monkeypatch.setenv("TEMPOFTP_SIM_FORCE", "ok")
+    request_data = {"usuario": "force.ok@example.com", "id": "force_ok_1", "ruta": "host:/src", "vigencia": 2}
+    r = client.post("/tmpftp", json=request_data)
+    assert r.status_code == 200
+    st = client.get("/tmpftp/force_ok_1").json()
+    assert st["status"] == "listo"
+    # limpiar
+    monkeypatch.delenv("TEMPOFTP_SIM_FORCE", raising=False)
+
+
+def test_sim_force_fail(client, monkeypatch):
+    """Forzar falla con TEMPOFTP_SIM_FORCE=fail"""
+    monkeypatch.setenv("TEMPOFTP_SIM_FORCE", "fail")
+    request_data = {"usuario": "force.fail@example.com", "id": "force_fail_1", "ruta": "host:/src", "vigencia": 2}
+    r = client.post("/tmpftp", json=request_data)
+    assert r.status_code == 400
+    body = r.json()
+    assert body["detail"]["status"] == "error"
+    assert body["detail"]["mensaje"] == "Espacio insuficiente"
+    monkeypatch.delenv("TEMPOFTP_SIM_FORCE", raising=False)
+
+
+def test_sim_sizes_ok(client, monkeypatch):
+    """Controlar por tamaños: remoto < libre => ok"""
+    monkeypatch.delenv("TEMPOFTP_SIM_FORCE", raising=False)
+    monkeypatch.setenv("TEMPOFTP_SIM_REMOTE_SIZE_BYTES", "1000")
+    monkeypatch.setenv("TEMPOFTP_SIM_DATA_FREE_BYTES", "2000")
+    request_data = {"usuario": "sizes.ok@example.com", "id": "sizes_ok_1", "ruta": "host:/src", "vigencia": 2}
+    r = client.post("/tmpftp", json=request_data)
+    assert r.status_code == 200
+    st = client.get("/tmpftp/sizes_ok_1").json()
+    assert st["status"] == "listo"
+    # limpiar
+    monkeypatch.delenv("TEMPOFTP_SIM_REMOTE_SIZE_BYTES", raising=False)
+    monkeypatch.delenv("TEMPOFTP_SIM_DATA_FREE_BYTES", raising=False)
+
+
+def test_sim_sizes_fail(client, monkeypatch):
+    """Controlar por tamaños: remoto > libre => fail"""
+    monkeypatch.delenv("TEMPOFTP_SIM_FORCE", raising=False)
+    monkeypatch.setenv("TEMPOFTP_SIM_REMOTE_SIZE_BYTES", "2000000")
+    monkeypatch.setenv("TEMPOFTP_SIM_DATA_FREE_BYTES", "1000000")
+    request_data = {"usuario": "sizes.fail@example.com", "id": "sizes_fail_1", "ruta": "host:/src", "vigencia": 2}
+    r = client.post("/tmpftp", json=request_data)
+    assert r.status_code == 400
+    body = r.json()
+    assert body["detail"]["status"] == "error"
+    assert body["detail"]["mensaje"] == "Espacio insuficiente"
+    monkeypatch.delenv("TEMPOFTP_SIM_REMOTE_SIZE_BYTES", raising=False)
+    monkeypatch.delenv("TEMPOFTP_SIM_DATA_FREE_BYTES", raising=False)
