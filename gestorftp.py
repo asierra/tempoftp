@@ -3,12 +3,20 @@ import subprocess
 import hashlib
 import asyncio
 import shutil
+import socket
 import logging
 from typing import Optional, Tuple, Dict
 import aiomysql
 from cifrado import cifrar
 from gestorftpbase import GestorFTPBase
 from tmpftpdb import TMPFTPdb
+
+try:
+    from passlib.hash import sha512_crypt, sha256_crypt, md5_crypt, des_crypt
+    PASSLIB_AVAILABLE = True
+except ImportError:
+    PASSLIB_AVAILABLE = False
+
 
 logger = logging.getLogger(__name__)
 
@@ -66,23 +74,21 @@ class FTPDB_MySQL:
                     stored_password = password
                 elif fmt == "crypt":
                     scheme = (os.getenv("FTP_CRYPT_SCHEME", "sha512_crypt") or "sha512_crypt").lower()
-                    try:
-                        from passlib.hash import sha512_crypt, sha256_crypt, md5_crypt, des_crypt
-                        if scheme == "sha512_crypt":
-                            stored_password = sha512_crypt.hash(password)
-                        elif scheme == "sha256_crypt":
-                            stored_password = sha256_crypt.hash(password)
-                        elif scheme == "md5_crypt":
-                            stored_password = md5_crypt.hash(password)
-                        elif scheme == "des_crypt":
-                            stored_password = des_crypt.hash(password)
-                        else:
-                            raise Exception(f"FTP_CRYPT_SCHEME desconocido: {scheme}")
-                    except Exception as e:
+                    if not PASSLIB_AVAILABLE:
                         raise Exception(
-                            "No se pudo generar hash 'crypt'. Instale 'passlib' y configure FTP_CRYPT_SCHEME. Detalle: "
-                            + str(e)
+                            "Para usar el formato 'crypt', instale la librería 'passlib'."
                         )
+
+                    hash_methods = {
+                        "sha512_crypt": sha512_crypt,
+                        "sha256_crypt": sha256_crypt,
+                        "md5_crypt": md5_crypt,
+                        "des_crypt": des_crypt,
+                    }
+                    if scheme in hash_methods:
+                        stored_password = hash_methods[scheme].hash(password)
+                    else:
+                        raise Exception(f"FTP_CRYPT_SCHEME desconocido: {scheme}")
                 else:
                     raise Exception(
                         f"FTP_PASSWORD_FORMAT desconocido: {fmt}. Use 'md5', 'cleartext' o 'crypt'."
@@ -129,25 +135,36 @@ class GestorFTP(GestorFTPBase):
                 raise Exception("Ruta remota inválida: formato de usuario@host incorrecto")
 
     def _parse_ruta_remota(self, ruta_remota: str) -> Tuple[str, Optional[str], str]:
-        ssh_user = os.getenv("RSYNC_SSH_USER") or "lanotadm"
-        host_ssh: Optional[str] = None
-        ruta = ruta_remota
-        if ':' in ruta_remota:
-            hostinfo, path = ruta_remota.split(':', 1)
-            if hostinfo == "":
-                if '/' in path:
-                    host_ssh, rest = path.split('/', 1)
-                    ruta = '/' + rest
-                else:
-                    host_ssh = path
-                    ruta = '/'
-            elif '@' in hostinfo:
-                _, host_ssh = hostinfo.split('@', 1)
-                ruta = path if path.startswith('/') else '/' + path
-            else:
-                host_ssh = hostinfo
-                ruta = path if path.startswith('/') else '/' + path
+        ssh_user_env = os.getenv("RSYNC_SSH_USER") or "lanotadm"
+        
+        hostinfo, path = ruta_remota.split(':', 1)
+        
+        user_part, at, host_part = hostinfo.partition('@')
+        ssh_user = user_part if at else ssh_user_env
+        host_ssh = host_part if at else hostinfo
+        ruta = path if path.startswith('/') else f'/{path}'
+
         return ssh_user, host_ssh, ruta
+
+    def _es_host_local(self, hostname: str) -> bool:
+        """Verifica si el hostname corresponde al host local."""
+        if hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::"):
+            return True
+        try:
+            target_ip = socket.gethostbyname(hostname)
+            if target_ip in ("127.0.0.1", "::1"):
+                return True
+            
+            # Obtener todas las IPs locales
+            local_ips = set()
+            for _, _, _, _, sockaddr in socket.getaddrinfo(socket.gethostname(), None):
+                local_ips.add(sockaddr[0])
+            
+            return target_ip in local_ips
+        except socket.gaierror:
+            logger.warning("No se pudo resolver el hostname '%s'. Asumiendo que es remoto.", hostname)
+            return False
+
 
     def obtener_tamano_remoto(self, ruta_remota: str, usuario_ssh: Optional[str] = None, host_ssh: Optional[str] = None) -> int:
         ssh_user_env, host_detectado, ruta = self._parse_ruta_remota(ruta_remota)
@@ -156,9 +173,14 @@ class GestorFTP(GestorFTPBase):
         if not host_ssh:
             raise Exception("No se pudo determinar el host remoto para SSH")
         ssh_target = f"{ssh_user}@{host_ssh}"
+
+        es_local = self._es_host_local(host_ssh)
+
         try:
             # du -sb <ruta> | awk '{print $1}'
-            cmd = ["ssh", ssh_target, "du", "-sb", ruta]
+            cmd = ["du", "-sb", ruta]
+            if not es_local:
+                cmd = ["ssh", ssh_target] + cmd
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             out = result.stdout.strip().splitlines()
             if not out:
@@ -168,17 +190,17 @@ class GestorFTP(GestorFTPBase):
             logger.info("Tamaño remoto para %s en %s: %s bytes", ruta, ssh_target, size)
             return size
         except subprocess.CalledProcessError as e:
-            msg = e.stderr.strip()
-            logger.error("SSH/du falló para %s@%s:%s: %s", ssh_user, host_ssh, ruta, msg)
-            raise Exception(f"SSH/du falló: {msg}")
+            msg = e.stderr.strip() if e.stderr else str(e)
+            logger.error("El comando '%s' falló para %s: %s", " ".join(cmd), ruta, msg)
+            raise Exception(f"El comando 'du' falló: {msg}")
         except Exception as e:
-            logger.error("Error al obtener tamaño remoto %s@%s:%s: %s", ssh_user, host_ssh, ruta, e)
+            logger.error("Error al obtener tamaño remoto para %s: %s", ruta, e)
             raise Exception(f"Error al obtener tamaño remoto: {e}")
 
-    def verificar_espacio_data(self, minimo_bytes: int = 1_000_000_000) -> bool:
+    async def verificar_espacio_data(self, minimo_bytes: int = 1_000_000_000) -> bool:
         usage = shutil.disk_usage('/data')
         ok = usage.free >= minimo_bytes
-        logger.info("Espacio libre en /data: %s bytes (mínimo requerido %s): %s", usage.free, minimo_bytes, ok)
+        await asyncio.to_thread(logger.info, "Espacio libre en /data: %s bytes (mínimo requerido %s): %s", usage.free, minimo_bytes, ok)
         return ok
 
     def _preparar_directorio(self, usuario: str, id: str, ruta_remota: Optional[str] = None) -> str:
@@ -224,6 +246,22 @@ class GestorFTP(GestorFTPBase):
             logger.error("El comando rsync no se encuentra en el sistema.")
             raise Exception("Error: El comando 'rsync' no se encuentra en el sistema.")
 
+    def _crear_enlace_local(self, ruta_origen_local: str, ruta_destino: str) -> None:
+        """Crea un enlace simbólico desde una ruta local al directorio de destino."""
+        if not os.path.exists(ruta_origen_local):
+            raise FileNotFoundError(f"La ruta de origen local no existe: {ruta_origen_local}")
+        
+        # El destino es el directorio de la solicitud, el enlace se crea dentro
+        nombre_enlace = os.path.basename(ruta_origen_local.rstrip('/'))
+        enlace = os.path.join(ruta_destino, nombre_enlace)
+
+        if os.path.lexists(enlace):
+            logger.warning("El enlace simbólico '%s' ya existe. No se sobreescribirá.", enlace)
+            return
+        
+        os.symlink(ruta_origen_local, enlace)
+        logger.info("Enlace simbólico creado: %s -> %s", enlace, ruta_origen_local)
+
     async def create_usertmp(self, id: str, email: str, ruta: str, vigencia: int) -> Dict[str, object]:
         # Validaciones iniciales
         self._verificar_solicitud_duplicada(id)
@@ -254,22 +292,33 @@ class GestorFTP(GestorFTPBase):
                 self.db.actualizar_estado(id, "preparando", {**info_inicial, "mensaje": "Creando entorno y verificando espacio."})
                 logger.info("Preparando entorno para %s (usuario=%s)", id, username)
                 tamano_remoto = await asyncio.to_thread(self.obtener_tamano_remoto, ruta)
-                if not self.verificar_espacio_data(tamano_remoto):
+                if not await self.verificar_espacio_data(tamano_remoto):
                     logger.error("Espacio insuficiente: requerido=%s bytes", tamano_remoto)
                     raise Exception(f"Espacio insuficiente en /data: se requieren {tamano_remoto} bytes")
-                base_dir = await asyncio.to_thread(self._preparar_directorio, username, id, ruta)
-
-                self.db.actualizar_estado(id, "traslado", {**info_inicial, "mensaje": f"Copiando datos desde {ruta} a {base_dir}."})
-                logger.info("Iniciando rsync %s -> %s", ruta, base_dir)
+                
                 ssh_user_env, host_detectado, ruta_norm = self._parse_ruta_remota(ruta)
-                origen = ruta if not host_detectado else f"{ssh_user_env}@{host_detectado}:{ruta_norm}"
-                # Si el último segmento coincide con el ID, copiar el contenido (añadir /)
-                last_segment = os.path.basename(ruta_norm.rstrip("/"))
-                rsync_origen = f"{origen.rstrip('/')}" + "/" if last_segment == id else origen
-                rsync_destino = base_dir
-                await asyncio.to_thread(self._ejecutar_rsync, rsync_origen, rsync_destino)
+                es_local = self._es_host_local(host_detectado)
+
+                if es_local:
+                    logger.info("El host %s es local. Se creará un enlace simbólico en lugar de rsync.", host_detectado)
+                    # Para enlaces, el destino es el homedir del usuario, no un subdirectorio con el ID.
+                    homedir = f"/data/{username}"
+                    await asyncio.to_thread(self._preparar_directorio, username, id, ruta, crear_dir_solicitud=False)
+                    await asyncio.to_thread(self._crear_enlace_local, ruta_norm, os.path.join(homedir, id))
+                else:
+                    base_dir = await asyncio.to_thread(self._preparar_directorio, username, id, ruta)
+                    self.db.actualizar_estado(id, "traslado", {**info_inicial, "mensaje": f"Copiando datos desde {ruta} a {base_dir}."})
+                    logger.info("Iniciando rsync %s -> %s", ruta, base_dir)
+                    logger.info("El host %s es remoto. Se usará rsync.", host_detectado)
+                    origen = f"{ssh_user_env}@{host_detectado}:{ruta_norm}"
+                    # Si el último segmento coincide con el ID, copiar el contenido (añadir /)
+                    last_segment = os.path.basename(ruta_norm.rstrip("/"))
+                    rsync_origen = f"{origen.rstrip('/')}" + "/" if last_segment == id else origen
+                    rsync_destino = base_dir
+                    await asyncio.to_thread(self._ejecutar_rsync, rsync_origen, rsync_destino)
 
                 if not ya_existe and password_claro:
+                    logger.info("Creando usuario FTP '%s' en MySQL.", username)
                     await self.db_mysql.crear_usuario_ftp(username, password_claro, f"/data/{username}")
 
                 info_final = {
@@ -293,3 +342,43 @@ class GestorFTP(GestorFTPBase):
             "mensaje": "Solicitud en proceso. Recibirá notificación cuando esté lista.",
             "vigencia": vigencia
         }
+
+    def _preparar_directorio(self, usuario: str, id: str, ruta_remota: Optional[str] = None, crear_dir_solicitud: bool = True) -> str:
+        homedir = f"/data/{usuario}"
+        owner_user = os.getenv("DATA_OWNER_USER") or os.getenv("RSYNC_SSH_USER") or "lanotadm"
+        owner_group = os.getenv("DATA_OWNER_GROUP") or owner_user
+        skip_chown = os.getenv("SKIP_CHOWN", "0") in ("1", "true", "True")
+
+        def _safe_chown(path: str) -> None:
+            try:
+                if not skip_chown:
+                    subprocess.run(["chown", f"{owner_user}:{owner_group}", path], check=True)
+            except Exception as e:
+                logger.warning("chown falló para %s: %s. Continuando.", path, e)
+            try:
+                os.chmod(path, 0o755)
+            except Exception as e:
+                logger.warning("chmod falló para %s: %s", path, e)
+
+        if not os.path.exists(homedir):
+            os.makedirs(homedir, exist_ok=True)
+            _safe_chown(homedir)
+
+        if crear_dir_solicitud:
+            solicitud_dir = os.path.join(homedir, id)
+            os.makedirs(solicitud_dir, exist_ok=True)
+            _safe_chown(solicitud_dir)
+            return solicitud_dir
+        return homedir
+
+    def _crear_enlace_local(self, ruta_origen_local: str, ruta_enlace_destino: str) -> None:
+        """Crea un enlace simbólico desde una ruta local a una ruta de destino específica."""
+        if not os.path.exists(ruta_origen_local):
+            raise FileNotFoundError(f"La ruta de origen local no existe: {ruta_origen_local}")
+
+        if os.path.lexists(ruta_enlace_destino):
+            logger.warning("El enlace simbólico '%s' ya existe. No se sobreescribirá.", ruta_enlace_destino)
+            return
+        
+        os.symlink(ruta_origen_local, ruta_enlace_destino)
+        logger.info("Enlace simbólico creado: %s -> %s", ruta_enlace_destino, ruta_origen_local)

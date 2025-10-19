@@ -1,10 +1,12 @@
 
 import os
 os.environ["TEMPOFTP_SIMULACRO"] = "1"
+import asyncio
 import pytest
 from fastapi.testclient import TestClient
-from main import app, gestorftp
+from main import app, get_gestor
 from cifrado import descifrar, ENCRYPTION_KEY
+from gestorftp import GestorFTP
 
 # Asegurarnos de que las pruebas usen la misma clave de cifrado
 os.environ["TEMPOFTP_ENCRYPTION_KEY"] = ENCRYPTION_KEY
@@ -13,8 +15,12 @@ os.environ["TEMPOFTP_ENCRYPTION_KEY"] = ENCRYPTION_KEY
 def client():
     """Crea una instancia de TestClient para cada prueba, asegurando el aislamiento."""
     # Reinicia la base de datos del gestor antes de cada prueba para evitar fugas de estado.
-    if hasattr(gestorftp, '_reiniciar_db_para_test'):
-        gestorftp._reiniciar_db_para_test()
+    # Limpiamos la cache para asegurar que cada test obtenga una instancia fresca del gestor.
+    get_gestor.cache_clear()
+    # Obtenemos la instancia que se usará en este entorno de test.
+    gestor_actual = get_gestor()
+    if hasattr(gestor_actual, '_reiniciar_db_para_test'):
+        gestor_actual._reiniciar_db_para_test()
     with TestClient(app) as c:
         yield c
 
@@ -158,3 +164,78 @@ def test_sim_sizes_fail(client, monkeypatch):
     assert body["detail"]["mensaje"] == "Espacio insuficiente"
     monkeypatch.delenv("TEMPOFTP_SIM_REMOTE_SIZE_BYTES", raising=False)
     monkeypatch.delenv("TEMPOFTP_SIM_DATA_FREE_BYTES", raising=False)
+
+
+async def test_create_local_path_uses_symlink(monkeypatch, tmp_path):
+    """
+    Verifica que al usar una ruta local, se llama a _crear_enlace_local
+    en lugar de _ejecutar_rsync.
+    Este test opera sobre el GestorFTP real, no el simulador.
+    """
+    # 1. Forzar el uso del GestorFTP real
+    monkeypatch.setenv("TEMPOFTP_SIMULACRO", "0")
+    # Limpiamos la cache para que get_gestor cree una instancia del GestorFTP real
+    get_gestor.cache_clear()
+    real_gestor = get_gestor()
+    # Sobreescribimos la dependencia en la app para asegurar que este gestor se use
+    # en las llamadas de la API dentro de este test.
+    app.dependency_overrides[get_gestor] = lambda: real_gestor
+
+    # 2. Mockear dependencias externas del GestorFTP real
+    # Mockear la conexión a la base de datos MySQL
+    monkeypatch.setattr(real_gestor.db_mysql, "connect", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(real_gestor.db_mysql, "close", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(real_gestor.db_mysql, "obtener_password_hash", lambda user: None)
+    monkeypatch.setattr(real_gestor.db_mysql, "crear_usuario_ftp", lambda user, pwd, home: asyncio.sleep(0))
+
+    # Mockear operaciones de sistema de archivos y subprocesos
+    monkeypatch.setattr("shutil.disk_usage", lambda path: (1000, 1000, 1000 * 1000 * 1000)) # 1GB free
+    monkeypatch.setattr("os.makedirs", lambda path, exist_ok=False: None)
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: None) # Evita chown
+
+    # Mockear la resolución de DNS para que el host parezca local
+    monkeypatch.setattr("socket.gethostbyname", lambda host: "127.0.0.1")
+    monkeypatch.setattr("socket.getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("127.0.0.1", 0))])
+
+    # Crear un directorio de origen falso para que el enlace no falle
+    origen_local = tmp_path / "origen_local_test"
+    origen_local.mkdir()
+    (origen_local / "testfile.txt").write_text("hello")
+
+    # Espiar las funciones clave para ver si se llaman
+    spy_symlink = []
+    spy_rsync = []
+    
+    original_symlink = real_gestor._crear_enlace_local
+    original_rsync = real_gestor._ejecutar_rsync
+
+    def mock_symlink(*args, **kwargs):
+        spy_symlink.append((args, kwargs))
+        return original_symlink(*args, **kwargs)
+
+    def mock_rsync(*args, **kwargs):
+        spy_rsync.append((args, kwargs))
+        return original_rsync(*args, **kwargs)
+
+    monkeypatch.setattr(real_gestor, "_crear_enlace_local", mock_symlink)
+    monkeypatch.setattr(real_gestor, "_ejecutar_rsync", mock_rsync)
+    monkeypatch.setattr(real_gestor, "obtener_tamano_remoto", lambda *args, **kwargs: 100) # 100 bytes
+
+    # 3. Ejecutar la lógica
+    request_data = {
+        "id": "test_local_symlink",
+        "email": "local@test.com",
+        "ruta": f"localhost:{origen_local}",
+        "vigencia": 1
+    }
+    # Usamos el gestor directamente porque la llamada a la API es compleja de seguir en test
+    await real_gestor.create_usertmp(**request_data)
+
+    # 4. Verificar el resultado
+    assert len(spy_symlink) == 1, "Se esperaba que _crear_enlace_local fuera llamado una vez"
+    assert len(spy_rsync) == 0, "Se esperaba que _ejecutar_rsync NO fuera llamado"
+
+    # Limpiar para no afectar otros tests
+    get_gestor.cache_clear()
+    app.dependency_overrides = {}
+    monkeypatch.setenv("TEMPOFTP_SIMULACRO", "1")

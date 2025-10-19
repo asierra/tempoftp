@@ -42,6 +42,9 @@ Respuesta:
 
 #### 3. Crear solicitud FTP temporal
 **POST /tmpftp**
+
+Inicia la creación de una cuenta FTP temporal. Esta es una operación asíncrona. La API responde inmediatamente con un código `202 Accepted` para indicar que la solicitud ha sido aceptada y se está procesando en segundo plano. El cliente debe consultar el estado periódicamente usando el endpoint `GET /tmpftp/{id}`.
+
 Cuerpo (JSON):
 ```json
 {
