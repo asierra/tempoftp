@@ -55,12 +55,11 @@ async def create_tmpftp(req: TmpFTPRequest, gestor=Depends(get_gestor)):
     try:
         # El gestor inicia el proceso en segundo plano y devuelve una confirmación inmediata.
         # La respuesta inicial no garantiza el éxito final de la tarea.
-        info_inicial = await gestor.create_usertmp(req.id, req.usuario, req.ruta, req.vigencia)
+        await gestor.create_usertmp(req.id, req.usuario, req.ruta, req.vigencia)
         return {
             "id": req.id,
             "status": "recibido",
-            "detail": "La solicitud ha sido aceptada y está en proceso.",
-            "info": info_inicial
+            "detail": "La solicitud ha sido aceptada y está en proceso."
         }
     except Exception as e:
         # Captura errores de validación iniciales (ej: ID duplicado, formato de ruta inválido).

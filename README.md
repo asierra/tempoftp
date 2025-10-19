@@ -58,7 +58,8 @@ Respuesta exitosa:
 ```json
 {
     "id": "proyecto_test_1",
-    "status": "recibido"
+    "status": "recibido",
+    "detail": "La solicitud ha sido aceptada y está en proceso."
 }
 ```
 
