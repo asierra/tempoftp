@@ -1,4 +1,3 @@
-
 import os
 os.environ["TEMPOFTP_SIMULACRO"] = "1"
 import asyncio
@@ -165,7 +164,8 @@ def test_sim_sizes_fail(client, monkeypatch):
     monkeypatch.delenv("TEMPOFTP_SIM_REMOTE_SIZE_BYTES", raising=False)
     monkeypatch.delenv("TEMPOFTP_SIM_DATA_FREE_BYTES", raising=False)
 
-
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_create_local_path_uses_symlink(monkeypatch, tmp_path):
     """
     Verifica que al usar una ruta local, se llama a _crear_enlace_local
@@ -183,10 +183,18 @@ async def test_create_local_path_uses_symlink(monkeypatch, tmp_path):
 
     # 2. Mockear dependencias externas del GestorFTP real
     # Mockear la conexión a la base de datos MySQL
-    monkeypatch.setattr(real_gestor.db_mysql, "connect", lambda: asyncio.sleep(0))
-    monkeypatch.setattr(real_gestor.db_mysql, "close", lambda: asyncio.sleep(0))
-    monkeypatch.setattr(real_gestor.db_mysql, "obtener_password_hash", lambda user: None)
-    monkeypatch.setattr(real_gestor.db_mysql, "crear_usuario_ftp", lambda user, pwd, home: asyncio.sleep(0))
+    async def _aconnect():
+        return None
+    async def _aclose():
+        return None
+    async def _nohash(user):
+        return None
+    async def _acreate(user, pwd, home):
+        return None
+    monkeypatch.setattr(real_gestor.db_mysql, "connect", _aconnect)
+    monkeypatch.setattr(real_gestor.db_mysql, "close", _aclose)
+    monkeypatch.setattr(real_gestor.db_mysql, "obtener_password_hash", _nohash)
+    monkeypatch.setattr(real_gestor.db_mysql, "crear_usuario_ftp", _acreate)
 
     # Mockear operaciones de sistema de archivos y subprocesos
     monkeypatch.setattr("shutil.disk_usage", lambda path: (1000, 1000, 1000 * 1000 * 1000)) # 1GB free
@@ -239,3 +247,4 @@ async def test_create_local_path_uses_symlink(monkeypatch, tmp_path):
     get_gestor.cache_clear()
     app.dependency_overrides = {}
     monkeypatch.setenv("TEMPOFTP_SIMULACRO", "1")
+

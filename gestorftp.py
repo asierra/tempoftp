@@ -199,8 +199,15 @@ class GestorFTP(GestorFTPBase):
 
     async def verificar_espacio_data(self, minimo_bytes: int = 1_000_000_000) -> bool:
         usage = shutil.disk_usage('/data')
-        ok = usage.free >= minimo_bytes
-        await asyncio.to_thread(logger.info, "Espacio libre en /data: %s bytes (mínimo requerido %s): %s", usage.free, minimo_bytes, ok)
+        # Soportar tanto namedtuple con atributo 'free' como tupla simple (total, used, free)
+        free = getattr(usage, 'free', None)
+        if free is None:
+            try:
+                free = usage[2]
+            except Exception:
+                free = 0
+        ok = free >= minimo_bytes
+        await asyncio.to_thread(logger.info, "Espacio libre en /data: %s bytes (mínimo requerido %s): %s", free, minimo_bytes, ok)
         return ok
 
     def _preparar_directorio(self, usuario: str, id: str, ruta_remota: Optional[str] = None) -> str:
@@ -301,7 +308,6 @@ class GestorFTP(GestorFTPBase):
 
                 if es_local:
                     logger.info("El host %s es local. Se creará un enlace simbólico en lugar de rsync.", host_detectado)
-                    # Para enlaces, el destino es el homedir del usuario, no un subdirectorio con el ID.
                     homedir = f"/data/{username}"
                     await asyncio.to_thread(self._preparar_directorio, username, id, ruta, crear_dir_solicitud=False)
                     await asyncio.to_thread(self._crear_enlace_local, ruta_norm, os.path.join(homedir, id))
@@ -311,7 +317,6 @@ class GestorFTP(GestorFTPBase):
                     logger.info("Iniciando rsync %s -> %s", ruta, base_dir)
                     logger.info("El host %s es remoto. Se usará rsync.", host_detectado)
                     origen = f"{ssh_user_env}@{host_detectado}:{ruta_norm}"
-                    # Si el último segmento coincide con el ID, copiar el contenido (añadir /)
                     last_segment = os.path.basename(ruta_norm.rstrip("/"))
                     rsync_origen = f"{origen.rstrip('/')}" + "/" if last_segment == id else origen
                     rsync_destino = base_dir
@@ -335,6 +340,7 @@ class GestorFTP(GestorFTPBase):
             finally:
                 await self.db_mysql.close()
 
+        # Ejecutar en background para producción (y tests harán polling)
         asyncio.create_task(proceso_copia())
         return {
             "usuario": username,
