@@ -202,9 +202,12 @@ async def test_create_local_path_uses_symlink(monkeypatch, tmp_path):
     monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: None) # Evita chown
 
     # Mockear la resolución de DNS para que el host parezca local
-    monkeypatch.setattr("socket.gethostbyname", lambda host: "127.0.0.1")
-    monkeypatch.setattr("socket.getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("127.0.0.1", 0))])
+    monkeypatch.setattr("gestorftp.socket.gethostbyname", lambda host: "127.0.0.1")
+    monkeypatch.setattr("gestorftp.socket.getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("127.0.0.1", 0))])
 
+    # (opcional) confirma que la detección local devuelve True
+    #assert real_gestor._es_host_local("localhost") is True
+    
     # Crear un directorio de origen falso para que el enlace no falle
     origen_local = tmp_path / "origen_local_test"
     origen_local.mkdir()
