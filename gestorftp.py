@@ -147,24 +147,52 @@ class GestorFTP(GestorFTPBase):
         return ssh_user, host_ssh, ruta
 
     def _es_host_local(self, hostname: str) -> bool:
-        """Verifica si el hostname corresponde al host local."""
-        if hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::"):
-            return True
-        try:
-            target_ip = socket.gethostbyname(hostname)
-            if target_ip in ("127.0.0.1", "::1"):
+        """Determina si 'hostname' debe considerarse local (criterio any-match)."""
+        if not hostname:
                 return True
-            
-            # Obtener todas las IPs locales
-            local_ips = set()
-            for _, _, _, _, sockaddr in socket.getaddrinfo(socket.gethostname(), None):
-                local_ips.add(sockaddr[0])
-            
-            return target_ip in local_ips
-        except socket.gaierror:
-            logger.warning("No se pudo resolver el hostname '%s'. Asumiendo que es remoto.", hostname)
-            return False
+        print("Hostmanon", hostname)
 
+        if ":" in hostname and "/" in hostname:
+            # Solo split si parece patrón 'host:/path' (no afectará '127.0.0.1')
+            host_part = hostname.split(":", 1)[0]
+            hostname = host_part
+
+        h = str(hostname).strip().lower()
+
+        # Atajos obvios
+        if h in ("localhost", "127.0.0.1", "::1"):
+            return True
+
+        try:
+            # Resolver TODAS las IPv4 para el hostname
+            resolved_ipv4 = set()
+            for ai in socket.getaddrinfo(h, None, socket.AF_INET, socket.SOCK_STREAM):
+                try:
+                    ip = ai[4][0]
+                    if ip:
+                            resolved_ipv4.add(ip)
+                except Exception:
+                    continue
+
+                # CUALQUIER IP loopback -> local
+                if any(ip.startswith("127.") for ip in resolved_ipv4):
+                    return True
+
+                # Obtener IPv4 locales
+            try:
+                    local_ipv4 = set(socket.gethostbyname_ex(socket.gethostname())[2])
+            except Exception:
+                local_ipv4 = set()
+            # Siempre considerar loopback como local
+            local_ipv4.add("127.0.0.1")
+
+            # CUALQUIER coincidencia entre resueltas y locales -> local
+            if any(ip in local_ipv4 for ip in resolved_ipv4):
+                return True
+
+        except socket.gaierror:
+            logger.warning("No se pudo resolver el hostname '%s'. Asumiendo remoto.", hostname)
+        return False
 
     def obtener_tamano_remoto(self, ruta_remota: str, usuario_ssh: Optional[str] = None, host_ssh: Optional[str] = None) -> int:
         ssh_user_env, host_detectado, ruta = self._parse_ruta_remota(ruta_remota)
@@ -210,7 +238,24 @@ class GestorFTP(GestorFTPBase):
         await asyncio.to_thread(logger.info, "Espacio libre en /data: %s bytes (mínimo requerido %s): %s", free, minimo_bytes, ok)
         return ok
 
-    def _preparar_directorio(self, usuario: str, id: str, ruta_remota: Optional[str] = None) -> str:
+    def _ejecutar_rsync(self, ruta_origen: str, ruta_destino: str) -> None:
+        try:
+            comando_rsync = ["rsync", "-av", "--info=progress2", ruta_origen, ruta_destino]
+            subprocess.run(
+                comando_rsync,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8'
+            )
+        except subprocess.CalledProcessError as e:
+            logger.error("rsync falló: %s", e.stderr)
+            raise Exception(f"Error durante la copia de datos (rsync): {e.stderr}")
+        except FileNotFoundError:
+            logger.error("El comando rsync no se encuentra en el sistema.")
+            raise Exception("Error: El comando 'rsync' no se encuentra en el sistema.")
+
+    def _preparar_directorio(self, usuario: str, id: str, ruta_remota: Optional[str] = None, crear_dir_solicitud: bool = True) -> str:
         homedir = f"/data/{usuario}"
         owner_user = os.getenv("DATA_OWNER_USER") or os.getenv("RSYNC_SSH_USER") or "lanotadm"
         owner_group = os.getenv("DATA_OWNER_GROUP") or owner_user
@@ -231,43 +276,24 @@ class GestorFTP(GestorFTPBase):
             os.makedirs(homedir, exist_ok=True)
             _safe_chown(homedir)
 
-        solicitud_dir = os.path.join(homedir, id)
-        os.makedirs(solicitud_dir, exist_ok=True)
-        _safe_chown(solicitud_dir)
-        return solicitud_dir
+        if crear_dir_solicitud:
+            solicitud_dir = os.path.join(homedir, id)
+            os.makedirs(solicitud_dir, exist_ok=True)
+            _safe_chown(solicitud_dir)
+            return solicitud_dir
+        return homedir
 
-    def _ejecutar_rsync(self, ruta_origen: str, ruta_destino: str) -> None:
-        try:
-            comando_rsync = ["rsync", "-av", "--info=progress2", ruta_origen, ruta_destino]
-            subprocess.run(
-                comando_rsync,
-                check=True,
-                capture_output=True,
-                text=True,
-                encoding='utf-8'
-            )
-        except subprocess.CalledProcessError as e:
-            logger.error("rsync falló: %s", e.stderr)
-            raise Exception(f"Error durante la copia de datos (rsync): {e.stderr}")
-        except FileNotFoundError:
-            logger.error("El comando rsync no se encuentra en el sistema.")
-            raise Exception("Error: El comando 'rsync' no se encuentra en el sistema.")
-
-    def _crear_enlace_local(self, ruta_origen_local: str, ruta_destino: str) -> None:
-        """Crea un enlace simbólico desde una ruta local al directorio de destino."""
+    def _crear_enlace_local(self, ruta_origen_local: str, ruta_enlace_destino: str) -> None:
+        """Crea un enlace simbólico desde una ruta local a una ruta de destino específica."""
         if not os.path.exists(ruta_origen_local):
             raise FileNotFoundError(f"La ruta de origen local no existe: {ruta_origen_local}")
-        
-        # El destino es el directorio de la solicitud, el enlace se crea dentro
-        nombre_enlace = os.path.basename(ruta_origen_local.rstrip('/'))
-        enlace = os.path.join(ruta_destino, nombre_enlace)
 
-        if os.path.lexists(enlace):
-            logger.warning("El enlace simbólico '%s' ya existe. No se sobreescribirá.", enlace)
+        if os.path.lexists(ruta_enlace_destino):
+            logger.warning("El enlace simbólico '%s' ya existe. No se sobreescribirá.", ruta_enlace_destino)
             return
         
-        os.symlink(ruta_origen_local, enlace)
-        logger.info("Enlace simbólico creado: %s -> %s", enlace, ruta_origen_local)
+        os.symlink(ruta_origen_local, ruta_enlace_destino)
+        logger.info("Enlace simbólico creado: %s -> %s", ruta_enlace_destino, ruta_origen_local)
 
     async def create_usertmp(self, id: str, email: str, ruta: str, vigencia: int) -> Dict[str, object]:
         # Validaciones iniciales
@@ -309,7 +335,7 @@ class GestorFTP(GestorFTPBase):
                 if es_local:
                     logger.info("El host %s es local. Se creará un enlace simbólico en lugar de rsync.", host_detectado)
                     homedir = f"/data/{username}"
-                    await asyncio.to_thread(self._preparar_directorio, username, id, ruta, crear_dir_solicitud=False)
+                    await asyncio.to_thread(self._preparar_directorio, username, id, ruta, False)
                     await asyncio.to_thread(self._crear_enlace_local, ruta_norm, os.path.join(homedir, id))
                 else:
                     base_dir = await asyncio.to_thread(self._preparar_directorio, username, id, ruta)
@@ -348,43 +374,3 @@ class GestorFTP(GestorFTPBase):
             "mensaje": "Solicitud en proceso. Recibirá notificación cuando esté lista.",
             "vigencia": vigencia
         }
-
-    def _preparar_directorio(self, usuario: str, id: str, ruta_remota: Optional[str] = None, crear_dir_solicitud: bool = True) -> str:
-        homedir = f"/data/{usuario}"
-        owner_user = os.getenv("DATA_OWNER_USER") or os.getenv("RSYNC_SSH_USER") or "lanotadm"
-        owner_group = os.getenv("DATA_OWNER_GROUP") or owner_user
-        skip_chown = os.getenv("SKIP_CHOWN", "0") in ("1", "true", "True")
-
-        def _safe_chown(path: str) -> None:
-            try:
-                if not skip_chown:
-                    subprocess.run(["chown", f"{owner_user}:{owner_group}", path], check=True)
-            except Exception as e:
-                logger.warning("chown falló para %s: %s. Continuando.", path, e)
-            try:
-                os.chmod(path, 0o755)
-            except Exception as e:
-                logger.warning("chmod falló para %s: %s", path, e)
-
-        if not os.path.exists(homedir):
-            os.makedirs(homedir, exist_ok=True)
-            _safe_chown(homedir)
-
-        if crear_dir_solicitud:
-            solicitud_dir = os.path.join(homedir, id)
-            os.makedirs(solicitud_dir, exist_ok=True)
-            _safe_chown(solicitud_dir)
-            return solicitud_dir
-        return homedir
-
-    def _crear_enlace_local(self, ruta_origen_local: str, ruta_enlace_destino: str) -> None:
-        """Crea un enlace simbólico desde una ruta local a una ruta de destino específica."""
-        if not os.path.exists(ruta_origen_local):
-            raise FileNotFoundError(f"La ruta de origen local no existe: {ruta_origen_local}")
-
-        if os.path.lexists(ruta_enlace_destino):
-            logger.warning("El enlace simbólico '%s' ya existe. No se sobreescribirá.", ruta_enlace_destino)
-            return
-        
-        os.symlink(ruta_origen_local, ruta_enlace_destino)
-        logger.info("Enlace simbólico creado: %s -> %s", ruta_enlace_destino, ruta_origen_local)
