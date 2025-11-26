@@ -184,7 +184,16 @@ sudo dnf install -y python3.11 python3.11-devel python3.11-pip mariadb-server pu
     ```
 
 3.  **Configurar Variables de Entorno:**
-    Crea un archivo `.env` en `/opt/tempoftp/` para almacenar las variables de entorno. **Este archivo debe ser protegido y no debe subirse al repositorio.**
+    Antes de crear el archivo `.env`, es crucial generar una clave de cifrado segura. Esta clave es utilizada por la API para proteger las contraseñas de los usuarios.
+
+    a.  **Generar la clave:**
+        Ejecuta el siguiente comando en tu terminal (con el entorno virtual activado):
+        ```bash
+        python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+        ```
+
+    b.  **Crear el archivo `.env`:**
+        Crea el archivo `/opt/tempoftp/.env` y pega la clave generada. **Este archivo debe ser protegido y no debe subirse al repositorio.**
 
     ```ini
     # /opt/tempoftp/.env
@@ -193,7 +202,6 @@ sudo dnf install -y python3.11 python3.11-devel python3.11-pip mariadb-server pu
     TEMPOFTP_LOG_LEVEL=INFO
 
     # --- Clave de Cifrado (¡CRÍTICO!) ---
-    # Genera una clave con: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     TEMPOFTP_ENCRYPTION_KEY="tu_clave_de_cifrado_generada"
 
     # --- Conexión a DB de Pure-FTPd ---
