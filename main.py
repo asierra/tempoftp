@@ -21,6 +21,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
+logger = logging.getLogger(__name__)
 app = FastAPI()
 
 # --- Placeholders to allow tests that monkeypatch these (Query Processor compatibility) ---
@@ -151,6 +152,7 @@ async def create_tmpftp(req: TmpFTPRequest, gestor=Depends(get_gestor)):
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail={"id": req.id, "status": "error", "mensaje": str(e)})
+        logger.error(f"Error al crear tmpftp para {req.id}: {e}", exc_info=True)
 
 @app.get("/tmpftp/{id}")
 async def get_tmpftp_status(id: str, gestor=Depends(get_gestor)):
@@ -264,4 +266,3 @@ async def obtener_consulta(
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=9043, log_level=os.getenv("TEMPOFTP_LOG_LEVEL", "info").lower())          
-
