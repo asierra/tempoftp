@@ -2,7 +2,6 @@ aiomysql
 cryptography
 fastapi
 httpx
-python-crontab
+passlib
 pytest
 uvicorn
-passlib
