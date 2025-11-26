@@ -3,6 +3,10 @@ import sys
 import argparse
 import httpx
 import json
+
+# Cargar .env ANTES de cualquier otra importación del proyecto
+from dotenv import load_dotenv
+load_dotenv()
 from cifrado import descifrar
 
 API_URL = "http://0.0.0.0:9043"

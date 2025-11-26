@@ -1,6 +1,6 @@
 {
   "usuario": "lanotadm@localhost",
   "id": "prueba1",
-  "ruta": "localhost:/data/ceniza/output/"
+  "ruta": "localhost:/data/ceniza/output/",
   "vigencia": 5
 }

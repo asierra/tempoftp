@@ -13,6 +13,9 @@ import types
 # --- Cargar variables de entorno desde .env para desarrollo ---
 from dotenv import load_dotenv
 load_dotenv()
+# --- Línea de depuración para verificar .env ---
+print(f"--- DEBUG: Valor de TEMPOFTP_ENCRYPTION_KEY: {os.getenv('TEMPOFTP_ENCRYPTION_KEY')} ---")
+# ---------------------------------------------
 
 # --- Logging configuration ---
 LOG_LEVEL = os.getenv("TEMPOFTP_LOG_LEVEL", "INFO").upper()
