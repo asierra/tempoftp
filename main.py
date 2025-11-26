@@ -10,6 +10,10 @@ import secrets
 import string
 import types
 
+# --- Cargar variables de entorno desde .env para desarrollo ---
+from dotenv import load_dotenv
+load_dotenv()
+
 # --- Logging configuration ---
 LOG_LEVEL = os.getenv("TEMPOFTP_LOG_LEVEL", "INFO").upper()
 try:
