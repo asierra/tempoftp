@@ -59,6 +59,20 @@ class FTPDB_MySQL:
                 row = await cur.fetchone()
                 return row[0] if row else None
 
+    async def actualizar_password_ftp(self, user: str, password: str) -> None:
+        """Actualiza la contraseña de un usuario FTP existente."""
+        stored_password = self._hash_password(password)
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                query = "UPDATE users SET Password=%s WHERE User=%s"
+                try:
+                    await cur.execute(query, (stored_password, user))
+                except Exception as e:
+                    conf = self.conf or {}
+                    ctx = f"user={conf.get('user')} host={conf.get('host')} db={conf.get('db')} table=users"
+                    msg = f"Error al actualizar password en MySQL ({ctx}). Detalle: {e}."
+                    raise Exception(msg)
+
     async def crear_usuario_ftp(self, user: str, password: str, homedir: str) -> None:
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -67,32 +81,7 @@ class FTPDB_MySQL:
                 if existe:
                     return
 
-                fmt = (os.getenv("FTP_PASSWORD_FORMAT", "md5") or "md5").lower()
-                if fmt == "md5":
-                    stored_password = hashlib.md5(password.encode()).hexdigest()
-                elif fmt == "cleartext":
-                    stored_password = password
-                elif fmt == "crypt":
-                    scheme = (os.getenv("FTP_CRYPT_SCHEME", "sha512_crypt") or "sha512_crypt").lower()
-                    if not PASSLIB_AVAILABLE:
-                        raise Exception(
-                            "Para usar el formato 'crypt', instale la librería 'passlib'."
-                        )
-
-                    hash_methods = {
-                        "sha512_crypt": sha512_crypt,
-                        "sha256_crypt": sha256_crypt,
-                        "md5_crypt": md5_crypt,
-                        "des_crypt": des_crypt,
-                    }
-                    if scheme in hash_methods:
-                        stored_password = hash_methods[scheme].hash(password)
-                    else:
-                        raise Exception(f"FTP_CRYPT_SCHEME desconocido: {scheme}")
-                else:
-                    raise Exception(
-                        f"FTP_PASSWORD_FORMAT desconocido: {fmt}. Use 'md5', 'cleartext' o 'crypt'."
-                    )
+                stored_password = self._hash_password(password)
 
                 uid = int(os.getenv("FTP_UID", 2001))
                 gid = int(os.getenv("FTP_GID", 2001))
@@ -109,6 +98,32 @@ class FTPDB_MySQL:
                         "Sugerencia: privilegios INSERT en ftpdb.users y que MYSQLCrypt coincide con FTP_PASSWORD_FORMAT."
                     )
                     raise Exception(msg)
+
+    def _hash_password(self, password: str) -> str:
+        """Genera el hash de la contraseña según la configuración."""
+        fmt = (os.getenv("FTP_PASSWORD_FORMAT", "md5") or "md5").lower()
+        if fmt == "md5":
+            return hashlib.md5(password.encode()).hexdigest()
+        if fmt == "cleartext":
+            return password
+        if fmt == "crypt":
+            scheme = (os.getenv("FTP_CRYPT_SCHEME", "sha512_crypt") or "sha512_crypt").lower()
+            if not PASSLIB_AVAILABLE:
+                raise Exception("Para usar el formato 'crypt', instale la librería 'passlib'.")
+
+            hash_methods = {
+                "sha512_crypt": sha512_crypt,
+                "sha256_crypt": sha256_crypt,
+                "md5_crypt": md5_crypt,
+                "des_crypt": des_crypt,
+            }
+            if scheme in hash_methods:
+                return hash_methods[scheme].hash(password)
+            
+            raise Exception(f"FTP_CRYPT_SCHEME desconocido: {scheme}")
+        
+        raise Exception(f"FTP_PASSWORD_FORMAT desconocido: {fmt}. Use 'md5', 'cleartext' o 'crypt'.")
+
 
 
 class GestorFTP(GestorFTPBase):
