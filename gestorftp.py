@@ -303,22 +303,19 @@ class GestorFTP(GestorFTPBase):
 
         # Obtener/crear password (sin exponer el claro en la respuesta final)
         await self.db_mysql.connect()
-        hash_existente = await self.db_mysql.obtener_password_hash(username)
-        if hash_existente:
-            password_claro = None
-            password_cifrada = cifrar(hash_existente)
-            ya_existe = True
-        else:
-            password_claro = self.generate_password()
-            password_cifrada = cifrar(password_claro)
-            ya_existe = False
+        password_claro = self.generate_password()
+        password_cifrada = cifrar(password_claro)
 
+        hash_existente = await self.db_mysql.obtener_password_hash(username)
+        ya_existe = hash_existente is not None
+        
         info_inicial = {
             "usuario": username,
             "password": password_cifrada,
             "vigencia": vigencia
         }
-        self.db.crear_solicitud(id, email, ruta, "recibido", {**info_inicial, "mensaje": "Solicitud en cola."})
+        self.db.crear_solicitud(id, email, ruta, "recibido", {**info_inicial, 
+            "mensaje": "Solicitud en cola."})
 
         async def proceso_copia() -> None:
             try:
@@ -348,9 +345,13 @@ class GestorFTP(GestorFTPBase):
                     rsync_destino = base_dir
                     await asyncio.to_thread(self._ejecutar_rsync, rsync_origen, rsync_destino)
 
-                if not ya_existe and password_claro:
-                    logger.info("Creando usuario FTP '%s' en MySQL.", username)
-                    await self.db_mysql.crear_usuario_ftp(username, password_claro, f"/data/{username}")
+                if password_claro:
+                    if ya_existe:
+                        logger.info("Actualizando password para usuario FTP '%s' en MySQL.", username)
+                        await self.db_mysql.actualizar_password_ftp(username, password_claro)
+                    else:
+                        logger.info("Creando usuario FTP '%s' en MySQL.", username)
+                        await self.db_mysql.crear_usuario_ftp(username, password_claro, f"/data/{username}")
 
                 info_final = {
                     "usuario": username,
