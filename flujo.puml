@@ -1,0 +1,69 @@
+@startuml
+!theme plain
+title Flujo Sistema TempoFTP
+
+|#d1e0e0|API / Backend|
+start
+:Recibir POST /tmpftp;
+if (¿Vigencia definida?) then (no)
+    :Set Vigencia = 5;
+endif
+
+|#ffe6cc|Base de Datos (SQLite)|
+:INSERT solicitud;
+:UPDATE Estado = "recibido";
+
+|#d1e0e0|API / Backend|
+:Preparar entorno (mkdir, permisos);
+
+if (¿Ruta es Local?) then (No, es remota)
+    :Verificar espacio en disco;
+    if (Espacio suficiente?) then (Sí)
+        |#e6ffe6|Sistema (Async Worker)|
+        :Ejecutar rsync (background);
+        |#ffe6cc|Base de Datos (SQLite)|
+        :UPDATE Estado = "trasladando";
+        |#e6ffe6|Sistema (Async Worker)|
+        :Esperar fin de rsync;
+        if (Exit Code 0?) then (Sí)
+             |#ffe6cc|Base de Datos (SQLite)|
+             :UPDATE Estado = "trasladado";
+        else (No)
+             :UPDATE Estado = "error";
+             stop
+        endif
+    else (No)
+        |#ffe6cc|Base de Datos (SQLite)|
+        :UPDATE Estado = "error";
+        stop
+    endif
+else (Sí, es local)
+    |API / Backend|
+    if (¿Directorio existe?) then (Sí)
+         |#ffe6cc|Base de Datos (SQLite)|
+         :UPDATE Estado = "trasladado";
+    else (No)
+         :UPDATE Estado = "error";
+         stop
+    endif
+endif
+
+|#d1e0e0|API / Backend|
+:Generar password;
+:Cifrar con Argon2;
+
+|#e6e6e6|MySQL (Pure-FTPd)|
+:INSERT usuario FTP;
+
+|#ffe6cc|Base de Datos (SQLite)|
+:UPDATE Estado = "ready";
+:Guardar credenciales;
+
+|#e6ffe6|Sistema (Async Worker)|
+:Programar Cron (Borrado tras vigencia);
+
+|API / Backend|
+:Fin del proceso de alta;
+stop
+@enduml
+
