@@ -10,3 +10,6 @@ instance/
 .DS_Store
 *.log
 tempoftp_simulacro.db
+.env
+.venv/
+tempoftp.db
