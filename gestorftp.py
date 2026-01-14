@@ -12,7 +12,7 @@ from gestorftpbase import GestorFTPBase
 from tmpftpdb import TMPFTPdb
 
 try:
-    from passlib.hash import sha512_crypt, sha256_crypt, md5_crypt, des_crypt
+    from passlib.hash import sha512_crypt, sha256_crypt, md5_crypt, des_crypt, argon2
     PASSLIB_AVAILABLE = True
 except ImportError:
     PASSLIB_AVAILABLE = False
@@ -104,6 +104,10 @@ class FTPDB_MySQL:
         fmt = (os.getenv("FTP_PASSWORD_FORMAT", "md5") or "md5").lower()
         if fmt == "md5":
             return hashlib.md5(password.encode()).hexdigest()
+        if fmt == "argon2":
+            if not PASSLIB_AVAILABLE:
+                raise Exception("Para usar el formato 'argon2', instale las librerías 'passlib' y 'argon2-cffi'.")
+            return argon2.hash(password)
         if fmt == "cleartext":
             return password
         if fmt == "crypt":
