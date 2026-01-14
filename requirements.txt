@@ -1,4 +1,5 @@
 aiomysql
+argon2-cffi
 cryptography
 fastapi
 httpx
