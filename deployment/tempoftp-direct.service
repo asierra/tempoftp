@@ -1,0 +1,16 @@
+[Unit]
+Description=FastAPI TempoFTP Service (Standalone)
+After=network.target
+
+[Service]
+User=lanotadm
+Group=lanotadm
+WorkingDirectory=/opt/tempoftp
+Environment="PATH=/opt/tempoftp/venv/bin"
+EnvironmentFile=/opt/tempoftp/.env
+# Ejecuta Uvicorn directamente en el puerto 9043 expuesto a la red (0.0.0.0)
+ExecStart=/opt/tempoftp/venv/bin/uvicorn main:app --workers 4 --host 0.0.0.0 --port 9043
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
