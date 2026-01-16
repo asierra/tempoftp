@@ -107,7 +107,16 @@ class FTPDB_MySQL:
         if fmt == "argon2":
             if not PASSLIB_AVAILABLE:
                 raise Exception("Para usar el formato 'argon2', instale las librerías 'passlib' y 'argon2-cffi'.")
-            return argon2.hash(password)
+            # CONFIGURACIÓN COMPATIBLE CON PURE-FTPD
+            # Usamos .using() para personalizar los costos
+            hasher = argon2.using(
+                t=2,           # Tiempo (iteraciones): 2 es suficiente
+                m=4096,        # Memoria: 4096 KB (4MB). El default es 65536 (64MB)
+                p=1,           # Paralelismo: 1 hilo
+                type='I'       # Tipo: 'I' (Argon2i). Es el más compatible con libsodium puro.
+            )
+            return hasher.hash(password)
+
         if fmt == "cleartext":
             return password
         if fmt == "crypt":
