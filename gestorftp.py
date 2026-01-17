@@ -10,12 +10,12 @@ import aiomysql
 from cifrado import cifrar
 from gestorftpbase import GestorFTPBase
 from tmpftpdb import TMPFTPdb
-
-try:
-    from passlib.hash import sha512_crypt, sha256_crypt, md5_crypt, des_crypt, argon2
-    PASSLIB_AVAILABLE = True
-except ImportError:
-    PASSLIB_AVAILABLE = False
+from argon2 import PasswordHasher
+#try:
+#    from passlib.hash import sha512_crypt, sha256_crypt, md5_crypt, des_crypt, argon2
+#    PASSLIB_AVAILABLE = True
+#except ImportError:
+#    PASSLIB_AVAILABLE = False
 
 
 logger = logging.getLogger(__name__)
@@ -100,43 +100,13 @@ class FTPDB_MySQL:
                     raise Exception(msg)
 
     def _hash_password(self, password: str) -> str:
-        """Genera el hash de la contraseña según la configuración."""
-        fmt = (os.getenv("FTP_PASSWORD_FORMAT", "md5") or "md5").lower()
-        if fmt == "md5":
-            return hashlib.md5(password.encode()).hexdigest()
-        if fmt == "argon2":
-            if not PASSLIB_AVAILABLE:
-                raise Exception("Para usar el formato 'argon2', instale las librerías 'passlib' y 'argon2-cffi'.")
-            # CONFIGURACIÓN COMPATIBLE CON PURE-FTPD
-            hasher = argon2.using(
-                rounds=2,          # Esto genera el t=2
-                memory_cost=4096,  # Esto genera el m=4096 (en KB)
-                parallelism=1,     # Esto genera el p=1
-                type='I'           # Esto fuerza Argon2i ($argon2i$)
-            )
-            return hasher.hash(password)
-
-        if fmt == "cleartext":
-            return password
-        if fmt == "crypt":
-            scheme = (os.getenv("FTP_CRYPT_SCHEME", "sha512_crypt") or "sha512_crypt").lower()
-            if not PASSLIB_AVAILABLE:
-                raise Exception("Para usar el formato 'crypt', instale la librería 'passlib'.")
-
-            hash_methods = {
-                "sha512_crypt": sha512_crypt,
-                "sha256_crypt": sha256_crypt,
-                "md5_crypt": md5_crypt,
-                "des_crypt": des_crypt,
-            }
-            if scheme in hash_methods:
-                return hash_methods[scheme].hash(password)
-            
-            raise Exception(f"FTP_CRYPT_SCHEME desconocido: {scheme}")
-        
-        raise Exception(f"FTP_PASSWORD_FORMAT desconocido: {fmt}. Use 'md5', 'cleartext' o 'crypt'.")
-
-
+        """
+        Genera un hash Argon2 compatible con Pure-FTPd.
+        Se simplifica para usar exclusivamente Argon2id (moderno y seguro).
+        """
+        ph = PasswordHasher()
+        # Genera el hash con salt incluido automáticamente
+        return ph.hash(password)
 
 class GestorFTP(GestorFTPBase):
     def __init__(self) -> None:
