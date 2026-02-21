@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from main import app, get_gestor
 from cifrado import descifrar, ENCRYPTION_KEY
 from gestorftp import GestorFTP
+from gestorftpsim import GestorFTPsim
 
 # Asegurarnos de que las pruebas usen la misma clave de cifrado
 os.environ["TEMPOFTP_ENCRYPTION_KEY"] = ENCRYPTION_KEY
@@ -163,3 +164,59 @@ def test_sim_sizes_fail(client, monkeypatch):
     assert body["detail"]["mensaje"] == "Espacio insuficiente"
     monkeypatch.delenv("TEMPOFTP_SIM_REMOTE_SIZE_BYTES", raising=False)
     monkeypatch.delenv("TEMPOFTP_SIM_DATA_FREE_BYTES", raising=False)
+
+def test_delete_request_lifecycle(client, monkeypatch):
+    """Prueba el ciclo de vida: crear, verificar y eliminar una solicitud."""
+    monkeypatch.setenv("TEMPOFTP_SIM_FORCE", "ok")
+    
+    req_id = "del_test_1"
+    request_data = {
+        "usuario": "del.user@example.com",
+        "id": req_id,
+        "ruta": "host:/data",
+        "vigencia": 1
+    }
+
+    # 1. Crear
+    r = client.post("/tmpftp", json=request_data)
+    assert r.status_code == 200
+
+    # 2. Verificar que existe
+    r = client.get(f"/tmpftp/{req_id}")
+    assert r.status_code == 200
+
+    # 3. Eliminar
+    r = client.delete(f"/tmpftp/{req_id}")
+    assert r.status_code == 200
+    assert r.json()["status"] == "deleted"
+
+    # 4. Verificar que ya no existe
+    r = client.get(f"/tmpftp/{req_id}")
+    assert r.status_code == 404
+
+    monkeypatch.delenv("TEMPOFTP_SIM_FORCE", raising=False)
+
+def test_delete_request_not_found(client):
+    """Prueba borrar una solicitud inexistente."""
+    r = client.delete("/tmpftp/id_no_existe_123")
+    assert r.status_code == 404
+
+def test_delete_user_success(client):
+    """Prueba borrar un usuario FTP (simulado)."""
+    # El simulador siempre devuelve éxito por defecto
+    r = client.delete("/tmpftp/user/ftp_usuario_test")
+    assert r.status_code == 200
+    assert r.json()["status"] == "deleted"
+
+def test_delete_user_not_found(client, monkeypatch):
+    """Prueba borrar un usuario inexistente (simulando respuesta not_found del gestor)."""
+    
+    # Monkeypatching el método en la clase para que devuelva not_found
+    async def mock_delete_not_found(self, user):
+        return {"status": "not_found", "mensaje": "Usuario no encontrado"}
+    
+    monkeypatch.setattr(GestorFTPsim, "delete_ftp_user", mock_delete_not_found)
+    
+    r = client.delete("/tmpftp/user/usuario_fantasma")
+    assert r.status_code == 404
+    assert r.json()["detail"] == "Usuario no encontrado"

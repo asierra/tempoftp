@@ -172,6 +172,29 @@ async def get_tmpftp_status(id: str, gestor=Depends(get_gestor)):
         return JSONResponse(content=result, status_code=status.HTTP_200_OK)
     return JSONResponse(content=result, status_code=status.HTTP_202_ACCEPTED, headers={"Retry-After": "10"})
 
+@app.delete("/tmpftp/{id}")
+async def delete_tmpftp_request(id: str, gestor=Depends(get_gestor)):
+    """Elimina una solicitud específica y sus datos asociados."""
+    try:
+        result = await gestor.delete_request(id)
+        if result.get("status") == "not_found":
+            raise HTTPException(status_code=404, detail="Solicitud no encontrada")
+        return JSONResponse(content=result, status_code=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error eliminando solicitud {id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/tmpftp/user/{user}")
+async def delete_ftp_user(user: str, gestor=Depends(get_gestor)):
+    """Elimina un usuario FTP virtual y todo su directorio home."""
+    try:
+        result = await gestor.delete_ftp_user(user)
+        if result.get("status") == "not_found":
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        return JSONResponse(content=result, status_code=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error eliminando usuario {user}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- Endpoints sugeridos aplicados ---
 # Se asume que existen en el entorno:

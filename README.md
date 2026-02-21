@@ -21,16 +21,24 @@ Este servicio, construido con FastAPI, expone una API para la creación de cuent
 
 #### 1. Estado del servicio
 **GET /**
-Respuesta:
+
+Consulta el estado actual del servicio para verificar que está activo.
+
+**Respuesta:**
 ```json
 {
     "status": "active"
 }
 ```
 
+---
+
 #### 2. Salud del servicio
 **GET /health**
-Respuesta:
+
+Consulta el estado del servicio y los recursos disponibles (espacio en disco, estado del servidor FTPd y base de datos).
+
+**Respuesta:**
 ```json
 {
     "status": "ok",
@@ -40,12 +48,14 @@ Respuesta:
 }
 ```
 
+---
+
 #### 3. Crear solicitud FTP temporal
 **POST /tmpftp**
 
 Inicia la creación de una cuenta FTP temporal. Esta es una operación asíncrona. La API responde inmediatamente con un código `202 Accepted` para indicar que la solicitud ha sido aceptada y se está procesando en segundo plano. El cliente debe consultar el estado periódicamente usando el endpoint `GET /tmpftp/{id}`.
 
-Cuerpo (JSON):
+**Cuerpo (JSON):**
 ```json
 {
     "usuario": "test.user@example.com",
@@ -54,48 +64,288 @@ Cuerpo (JSON):
     "vigencia": 5
 }
 ```
-Respuesta exitosa:
+
+**Parámetros:**
+- `usuario`: Dirección de correo electrónico del usuario (string)
+- `id`: Identificador único del proyecto/solicitud (string)
+- `ruta`: Ruta remota en formato `host:/path` o `usuario@host:/path` (string)
+- `vigencia`: Número de días de validez de la cuenta FTP (integer)
+
+**Respuesta exitosa (202 Accepted):**
 ```json
 {
     "id": "proyecto_test_1",
-    "status": "recibido",
+    "status": "procesando",
     "detail": "La solicitud ha sido aceptada y está en proceso."
 }
 ```
 
+**Respuesta si está lista inmediatamente (200 OK):**
+```json
+{
+    "id": "proyecto_test_1",
+    "status": "listo",
+    "ftpuser": "ftp_testuser_xxxx",
+    "password": "Abc123xyz...",
+    "vigencia": 5,
+    "mensaje": "Listo, acceso creado"
+}
+```
 
-#### 4. Consultar estado de solicitud
+**Respuesta de error (400 Bad Request):**
+```json
+{
+    "detail": {
+        "id": "proyecto_test_1",
+        "status": "error",
+        "mensaje": "Espacio insuficiente"
+    }
+}
+```
+
+---
+
+#### 4. Consultar estado de solicitud FTP temporal
 **GET /tmpftp/{id}**
-Respuesta (ejemplo exitoso):
+
+Consulta el estado de una solicitud de cuenta FTP temporal. Retorna información sobre el progreso y, cuando está lista, las credenciales de acceso.
+
+**Parámetros de ruta:**
+- `id`: Identificador único de la solicitud (string)
+
+**Respuesta (ejemplo pendiente - 202 Accepted):**
+```json
+{
+    "status": "procesando",
+    "mensaje": "Copiando datos..."
+}
+```
+
+**Respuesta (ejemplo exitoso - 200 OK):**
 ```json
 {
     "status": "listo",
     "ftpuser": "ftp_testuser_xxxx",
-    "password": "Abc123xyz...",  // Contraseña cifrada
+    "password": "Abc123xyz...",
     "vigencia": 5,
     "mensaje": "Listo, tiene 5 días para hacer la descarga."
 }
 ```
 
-### Ejemplos de errores
-
-**Solicitud no encontrada:**
+**Respuesta de error (404 Not Found):**
 ```json
 {
     "detail": "No encontrado"
 }
 ```
 
-**Error por espacio insuficiente:**
+---
+
+#### 5. Eliminar solicitud FTP temporal
+**DELETE /tmpftp/{id}**
+
+Elimina una solicitud específica y sus datos asociados (base de datos SQLite y archivos).
+
+**Parámetros de ruta:**
+- `id`: Identificador único de la solicitud (string)
+
+**Respuesta exitosa (200 OK):**
 ```json
 {
-    "detail": {
-        "id": "proyecto_test_2",
-        "status": "error",
-        "mensaje": "Espacio insuficiente"
+    "status": "deleted",
+    "id": "proyecto_test_1",
+    "mensaje": "Solicitud eliminada exitosamente"
+}
+```
+
+**Respuesta de error (404 Not Found):**
+```json
+{
+    "detail": "Solicitud no encontrada"
+}
+```
+
+**Respuesta de error (500 Internal Server Error):**
+```json
+{
+    "detail": "Error al eliminar los archivos"
+}
+```
+
+---
+
+#### 6. Eliminar usuario FTP
+**DELETE /tmpftp/user/{user}**
+
+Elimina un usuario FTP virtual de la base de datos MySQL de Pure-FTPd y todo su directorio home asociado.
+
+**Parámetros de ruta:**
+- `user`: Nombre del usuario FTP (string)
+
+**Respuesta exitosa (200 OK):**
+```json
+{
+    "status": "deleted",
+    "user": "ftp_testuser_xxxx",
+    "mensaje": "Usuario FTP eliminado exitosamente"
+}
+```
+
+**Respuesta de error (404 Not Found):**
+```json
+{
+    "detail": "Usuario no encontrado"
+}
+```
+
+**Respuesta de error (500 Internal Server Error):**
+```json
+{
+    "detail": "Error al eliminar el directorio del usuario"
+}
+```
+
+---
+
+#### 7. Crear consulta de recuperación
+**POST /query**
+
+Crea una nueva consulta para procesar y recuperar archivos. Esta operación es asíncrona y retorna un ID de consulta que puede ser usado para verificar el progreso.
+
+**Cuerpo (JSON):**
+```json
+{
+    "parametro1": "valor1",
+    "parametro2": "valor2"
+}
+```
+
+**Respuesta exitosa (202 Accepted):**
+```json
+{
+    "success": true,
+    "consulta_id": "AbCdEfGh",
+    "estado": "recibido"
+}
+```
+
+**Headers de respuesta:**
+- `Location`: `/query/{consulta_id}` - URL para consultar el estado
+
+**Respuesta de error (400 Bad Request):**
+```json
+{
+    "detail": "Error en los parámetros de la solicitud"
+}
+```
+
+---
+
+#### 8. Consultar estado de una consulta
+**GET /query/{consulta_id}**
+
+Obtiene el estado actual de una consulta de recuperación, incluyendo progreso, mensajes y resultados cuando está completa.
+
+**Parámetros de ruta:**
+- `consulta_id`: Identificador único de la consulta (string)
+
+**Parámetros de query:**
+- `resultados`: (opcional, boolean) Si es `true` y la consulta está completa, retorna solo los resultados
+
+**Respuesta en progreso (202 Accepted):**
+```json
+{
+    "consulta_id": "AbCdEfGh",
+    "estado": "procesando",
+    "progreso": 45,
+    "mensaje": "Procesando archivos...",
+    "timestamp": "2026-02-21T10:30:00Z"
+}
+```
+
+**Respuesta completada (200 OK):**
+```json
+{
+    "consulta_id": "AbCdEfGh",
+    "estado": "completado",
+    "progreso": 100,
+    "mensaje": "Consulta completada exitosamente",
+    "timestamp": "2026-02-21T10:35:00Z",
+    "total_archivos": 150,
+    "archivos_lustre": 120,
+    "archivos_s3": 30
+}
+```
+
+**Respuesta con solo resultados (200 OK, cuando `?resultados=true`):**
+```json
+{
+    "consulta_id": "AbCdEfGh",
+    "estado": "completado",
+    "resultados": {
+        "total_archivos": 150,
+        "fuentes": {
+            "lustre": {"total": 120},
+            "s3": {"total": 30}
+        }
     }
 }
 ```
+
+**Respuesta de error (404 Not Found):**
+```json
+{
+    "detail": "Consulta no encontrada"
+}
+```
+
+**Respuesta de error (500 Internal Server Error):**
+```json
+{
+    "consulta_id": "AbCdEfGh",
+    "estado": "error",
+    "progreso": 60,
+    "mensaje": "Error al procesar archivos",
+    "timestamp": "2026-02-21T10:33:00Z"
+}
+```
+
+---
+
+#### 9. Reiniciar una consulta
+**POST /query/{consulta_id}/restart**
+
+Reinicia el procesamiento de una consulta que está en estado `procesando`, `error` o `completado`. Útil para reintentar consultas fallidas o reprocesar consultas completadas.
+
+**Parámetros de ruta:**
+- `consulta_id`: Identificador único de la consulta (string)
+
+**Respuesta exitosa (202 Accepted):**
+```json
+{
+    "success": true,
+    "message": "La consulta 'AbCdEfGh' ha sido reenviada para su procesamiento."
+}
+```
+
+**Headers de respuesta:**
+- `Location`: `/query/{consulta_id}` - URL para consultar el estado
+
+**Respuesta de error (404 Not Found):**
+```json
+{
+    "detail": "Consulta no encontrada."
+}
+```
+
+**Respuesta de error (400 Bad Request):**
+```json
+{
+    "detail": "No se puede reiniciar una consulta en estado 'recibido'. Solo 'procesando', 'error' o 'completado'."
+}
+```
+
+---
 
 ## Instalación
 

@@ -86,3 +86,15 @@ class GestorFTPsim(GestorFTPBase):
         logger.info("SIMULACRO: Programando cron para eliminar al usuario %s y la carpeta en %s días.", username, vigencia)
         # Simulación de cron
         return
+
+    async def delete_request(self, id: str):
+        solicitud = self.db.obtener_solicitud(id)
+        if not solicitud:
+            return {"status": "not_found"}
+        self.db.eliminar_solicitud(id)
+        logger.info("SIMULACRO: Eliminada solicitud %s y datos simulados.", id)
+        return {"status": "deleted", "id": id}
+
+    async def delete_ftp_user(self, usuario: str):
+        logger.info("SIMULACRO: Eliminado usuario FTP %s y home dir.", usuario)
+        return {"status": "deleted", "usuario": usuario}

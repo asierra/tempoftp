@@ -73,6 +73,17 @@ class FTPDB_MySQL:
                     msg = f"Error al actualizar password en MySQL ({ctx}). Detalle: {e}."
                     raise Exception(msg)
 
+    async def eliminar_usuario_ftp(self, user: str) -> bool:
+        """Elimina un usuario FTP de la base de datos."""
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                # Verificar si existe primero para retornar bool
+                await cur.execute("SELECT COUNT(*) FROM users WHERE User=%s", (user,))
+                if (await cur.fetchone())[0] == 0:
+                    return False
+                await cur.execute("DELETE FROM users WHERE User=%s", (user,))
+                return True
+
     async def crear_usuario_ftp(self, user: str, password: str, homedir: str) -> None:
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -291,6 +302,57 @@ class GestorFTP(GestorFTPBase):
         
         os.symlink(ruta_origen_local, ruta_enlace_destino)
         logger.info("Enlace simbólico creado: %s -> %s", ruta_enlace_destino, ruta_origen_local)
+
+    def _borrar_directorio_seguro(self, path: str) -> bool:
+        """Elimina un directorio asegurando que esté dentro de /data."""
+        real_path = os.path.abspath(path)
+        if not real_path.startswith("/data/"):
+            logger.error("Intento de borrar ruta insegura: %s", real_path)
+            raise Exception("Operación de borrado rechazada por seguridad (ruta fuera de /data)")
+        
+        if os.path.exists(real_path):
+            try:
+                if os.path.islink(real_path):
+                    os.unlink(real_path)
+                else:
+                    shutil.rmtree(real_path)
+                logger.info("Directorio eliminado: %s", real_path)
+                return True
+            except Exception as e:
+                logger.error("Error borrando %s: %s", real_path, e)
+                raise Exception(f"Error borrando archivos: {e}")
+        return False
+
+    async def delete_request(self, id: str) -> Dict[str, str]:
+        """Elimina una solicitud específica y su carpeta de datos."""
+        solicitud = self.db.obtener_solicitud(id)
+        if not solicitud:
+            return {"status": "not_found", "mensaje": "Solicitud no encontrada"}
+        
+        info = solicitud.get("info", {})
+        usuario = info.get("usuario")
+        
+        if usuario:
+            ruta_destino = f"/data/{usuario}/{id}"
+            await asyncio.to_thread(self._borrar_directorio_seguro, ruta_destino)
+        
+        self.db.eliminar_solicitud(id)
+        return {"status": "deleted", "id": id}
+
+    async def delete_ftp_user(self, usuario: str) -> Dict[str, str]:
+        """Elimina un usuario FTP (MySQL) y todo su directorio home."""
+        await self.db_mysql.connect()
+        try:
+            user_deleted = await self.db_mysql.eliminar_usuario_ftp(usuario)
+            ruta_home = f"/data/{usuario}"
+            dir_deleted = await asyncio.to_thread(self._borrar_directorio_seguro, ruta_home)
+            
+            if not user_deleted and not dir_deleted:
+                return {"status": "not_found", "mensaje": "Usuario o directorio no encontrados"}
+            
+            return {"status": "deleted", "usuario": usuario}
+        finally:
+            await self.db_mysql.close()
 
     async def create_usertmp(self, id: str, email: str, ruta: str, vigencia: int) -> Dict[str, object]:
         # Validaciones iniciales
