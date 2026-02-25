@@ -37,6 +37,7 @@ class FTPDB_MySQL:
         dbname = os.getenv("FTP_DB_NAME", "ftpdb")
         self.conf = {"host": host, "port": port, "user": user, "db": dbname}
         if self.pool is None:
+            logger.debug("Iniciando pool de conexión MySQL")
             self.pool = await aiomysql.create_pool(
                 host=host,
                 port=port,
@@ -48,6 +49,7 @@ class FTPDB_MySQL:
 
     async def close(self) -> None:
         if self.pool:
+            logger.debug("Cerrando pool de conexión MySQL")
             self.pool.close()
             await self.pool.wait_closed()
             self.pool = None
@@ -156,7 +158,6 @@ class GestorFTP(GestorFTPBase):
         """Determina si 'hostname' debe considerarse local (criterio any-match)."""
         if not hostname:
                 return True
-        print("Hostmanon", hostname)
 
         if ":" in hostname and "/" in hostname:
             # Solo split si parece patrón 'host:/path' (no afectará '127.0.0.1')
