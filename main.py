@@ -169,6 +169,12 @@ async def get_tmpftp_status(id: str, gestor=Depends(get_gestor)):
         raise HTTPException(status_code=404, detail="No encontrado")
     st = str(result.get("status", "")).lower()
     if st == "listo":
+        # Enriquecer respuesta con estadísticas de descarga (si existen)
+        ftp_user = result.get("ftpuser") or result.get("usuario") # fallback por si el campo varía
+        if ftp_user:
+            stats = await gestor.obtener_estadisticas_descargas(ftp_user)
+            # Mezclar stats en la respuesta principal o bajo una clave 'descargas'
+            result["descargas"] = stats
         return JSONResponse(content=result, status_code=status.HTTP_200_OK)
     return JSONResponse(content=result, status_code=status.HTTP_202_ACCEPTED, headers={"Retry-After": "10"})
 

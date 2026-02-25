@@ -5,7 +5,7 @@ import asyncio
 import shutil
 import socket
 import logging
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any
 import aiomysql
 from cifrado import cifrar
 from gestorftpbase import GestorFTPBase
@@ -338,6 +338,44 @@ class GestorFTP(GestorFTPBase):
         
         self.db.eliminar_solicitud(id)
         return {"status": "deleted", "id": id}
+
+    async def obtener_estadisticas_descargas(self, usuario_ftp: str) -> Dict[str, Any]:
+        """
+        Lee el log de transferencias para obtener un resumen de descargas del usuario.
+        Retorna cantidad de archivos y fecha de la última descarga.
+        """
+        log_path = "/var/log/pure-ftpd/transfer.log"
+        stats = {"total_descargas": 0, "ultima_descarga": None}
+        
+        if not usuario_ftp or not os.path.exists(log_path):
+            return stats
+
+        def _leer_log():
+            count = 0
+            last_date = None
+            try:
+                # errors='replace' para evitar fallos con caracteres extraños en nombres de archivo
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        # Filtro rápido: si la línea no tiene el usuario, saltar
+                        if usuario_ftp not in line:
+                            continue
+                        
+                        # Verificar que sea una descarga (GET) y exitosa (200)
+                        # Formato CLF típico: IP - USER [DATE] "GET /path" 200 SIZE
+                        if '"GET ' in line and ' 200 ' in line:
+                            count += 1
+                            # Extraer fecha entre corchetes: [dd/Mon/yyyy:HH:mm:ss +xxxx]
+                            start = line.find('[')
+                            end = line.find(']')
+                            if start != -1 and end != -1:
+                                last_date = line[start+1:end]
+            except PermissionError:
+                logger.warning("No se puede leer %s. Verifique permisos (chmod 644).", log_path)
+            return count, last_date
+
+        count, last_date = await asyncio.to_thread(_leer_log)
+        return {"total_descargas": count, "ultima_descarga": last_date}
 
     async def delete_ftp_user(self, usuario: str) -> Dict[str, str]:
         """Elimina un usuario FTP (MySQL) y todo su directorio home."""
