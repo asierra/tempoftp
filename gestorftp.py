@@ -126,8 +126,6 @@ class GestorFTP(GestorFTPBase):
             self.db = TMPFTPdb(db_path=':memory:')
         else:
             self.db = TMPFTPdb()
-        # Conector MySQL para usuarios FTP
-        self.db_mysql = FTPDB_MySQL()
 
     def _validar_ruta_remota(self, ruta_remota: str) -> None:
         if not ruta_remota or ':' not in ruta_remota:
@@ -379,9 +377,10 @@ class GestorFTP(GestorFTPBase):
 
     async def delete_ftp_user(self, usuario: str) -> Dict[str, str]:
         """Elimina un usuario FTP (MySQL) y todo su directorio home."""
-        await self.db_mysql.connect()
+        db_mysql = FTPDB_MySQL()
+        await db_mysql.connect()
         try:
-            user_deleted = await self.db_mysql.eliminar_usuario_ftp(usuario)
+            user_deleted = await db_mysql.eliminar_usuario_ftp(usuario)
             ruta_home = f"/data/{usuario}"
             dir_deleted = await asyncio.to_thread(self._borrar_directorio_seguro, ruta_home)
             
@@ -390,7 +389,7 @@ class GestorFTP(GestorFTPBase):
             
             return {"status": "deleted", "usuario": usuario}
         finally:
-            await self.db_mysql.close()
+            await db_mysql.close()
 
     async def create_usertmp(self, id: str, email: str, ruta: str, vigencia: int) -> Dict[str, object]:
         # Validaciones iniciales
@@ -399,76 +398,83 @@ class GestorFTP(GestorFTPBase):
         username = self.generate_username(email)
 
         # Obtener/crear password (sin exponer el claro en la respuesta final)
-        await self.db_mysql.connect()
+        db_mysql = FTPDB_MySQL()
+        await db_mysql.connect()
+        
         password_claro = self.generate_password()
         password_cifrada = cifrar(password_claro)
 
-        hash_existente = await self.db_mysql.obtener_password_hash(username)
-        ya_existe = hash_existente is not None
-        
-        info_inicial = {
-            "usuario": username,
-            "password": password_cifrada,
-            "vigencia": vigencia
-        }
-        self.db.crear_solicitud(id, email, ruta, "recibido", {**info_inicial, 
-            "mensaje": "Solicitud en cola."})
+        try:
+            hash_existente = await db_mysql.obtener_password_hash(username)
+            ya_existe = hash_existente is not None
+            
+            info_inicial = {
+                "usuario": username,
+                "password": password_cifrada,
+                "vigencia": vigencia
+            }
+            self.db.crear_solicitud(id, email, ruta, "recibido", {**info_inicial, 
+                "mensaje": "Solicitud en cola."})
 
-        async def proceso_copia() -> None:
-            try:
-                self.db.actualizar_estado(id, "preparando", {**info_inicial, "mensaje": "Creando entorno y verificando espacio."})
-                logger.info("Preparando entorno para %s (usuario=%s)", id, username)
-                tamano_remoto = await asyncio.to_thread(self.obtener_tamano_remoto, ruta)
-                if not await self.verificar_espacio_data(tamano_remoto):
-                    logger.error("Espacio insuficiente: requerido=%s bytes", tamano_remoto)
-                    raise Exception(f"Espacio insuficiente en /data: se requieren {tamano_remoto} bytes")
-                
-                ssh_user_env, host_detectado, ruta_norm = self._parse_ruta_remota(ruta)
-                es_local = self._es_host_local(host_detectado)
+            async def proceso_copia() -> None:
+                try:
+                    self.db.actualizar_estado(id, "preparando", {**info_inicial, "mensaje": "Creando entorno y verificando espacio."})
+                    logger.info("Preparando entorno para %s (usuario=%s)", id, username)
+                    tamano_remoto = await asyncio.to_thread(self.obtener_tamano_remoto, ruta)
+                    if not await self.verificar_espacio_data(tamano_remoto):
+                        logger.error("Espacio insuficiente: requerido=%s bytes", tamano_remoto)
+                        raise Exception(f"Espacio insuficiente en /data: se requieren {tamano_remoto} bytes")
+                    
+                    ssh_user_env, host_detectado, ruta_norm = self._parse_ruta_remota(ruta)
+                    es_local = self._es_host_local(host_detectado)
 
-                if es_local:
-                    logger.info("El host %s es local. Se creará un enlace simbólico en lugar de rsync.", host_detectado)
-                    homedir = f"/data/{username}"
-                    await asyncio.to_thread(self._preparar_directorio, username, id, ruta, False)
-                    await asyncio.to_thread(self._crear_enlace_local, ruta_norm, os.path.join(homedir, id))
-                else:
-                    base_dir = await asyncio.to_thread(self._preparar_directorio, username, id, ruta)
-                    self.db.actualizar_estado(id, "traslado", {**info_inicial, "mensaje": f"Copiando datos desde {ruta} a {base_dir}."})
-                    logger.info("Iniciando rsync %s -> %s", ruta, base_dir)
-                    logger.info("El host %s es remoto. Se usará rsync.", host_detectado)
-                    origen = f"{ssh_user_env}@{host_detectado}:{ruta_norm}"
-                    last_segment = os.path.basename(ruta_norm.rstrip("/"))
-                    rsync_origen = f"{origen.rstrip('/')}" + "/" if last_segment == id else origen
-                    rsync_destino = base_dir
-                    await asyncio.to_thread(self._ejecutar_rsync, rsync_origen, rsync_destino)
-
-                if password_claro:
-                    if ya_existe:
-                        logger.info("Actualizando password para usuario FTP '%s' en MySQL.", username)
-                        await self.db_mysql.actualizar_password_ftp(username, password_claro)
+                    if es_local:
+                        logger.info("El host %s es local. Se creará un enlace simbólico en lugar de rsync.", host_detectado)
+                        homedir = f"/data/{username}"
+                        await asyncio.to_thread(self._preparar_directorio, username, id, ruta, False)
+                        await asyncio.to_thread(self._crear_enlace_local, ruta_norm, os.path.join(homedir, id))
                     else:
-                        logger.info("Creando usuario FTP '%s' en MySQL.", username)
-                        await self.db_mysql.crear_usuario_ftp(username, password_claro, f"/data/{username}")
+                        base_dir = await asyncio.to_thread(self._preparar_directorio, username, id, ruta)
+                        self.db.actualizar_estado(id, "traslado", {**info_inicial, "mensaje": f"Copiando datos desde {ruta} a {base_dir}."})
+                        logger.info("Iniciando rsync %s -> %s", ruta, base_dir)
+                        logger.info("El host %s es remoto. Se usará rsync.", host_detectado)
+                        origen = f"{ssh_user_env}@{host_detectado}:{ruta_norm}"
+                        last_segment = os.path.basename(ruta_norm.rstrip("/"))
+                        rsync_origen = f"{origen.rstrip('/')}" + "/" if last_segment == id else origen
+                        rsync_destino = base_dir
+                        await asyncio.to_thread(self._ejecutar_rsync, rsync_origen, rsync_destino)
 
-                info_final = {
-                    "usuario": username,
-                    "password": password_cifrada,
-                    "mensaje": f"Listo, tiene {vigencia} días para hacer la descarga.",
-                    "vigencia": vigencia
-                }
-                self.db.actualizar_estado(id, "listo", info_final)
-                logger.info("Solicitud %s lista para usuario %s", id, username)
-            except Exception as e:
-                logger.error("Fallo en proceso_copia (%s): %s", id, e)
-                self.db.actualizar_estado(id, "error", {**info_inicial, "mensaje": str(e)})
-            finally:
-                await self.db_mysql.close()
+                    if password_claro:
+                        if ya_existe:
+                            logger.info("Actualizando password para usuario FTP '%s' en MySQL.", username)
+                            await db_mysql.actualizar_password_ftp(username, password_claro)
+                        else:
+                            logger.info("Creando usuario FTP '%s' en MySQL.", username)
+                            await db_mysql.crear_usuario_ftp(username, password_claro, f"/data/{username}")
 
-        # Ejecutar en background para producción (y tests harán polling)
-        asyncio.create_task(proceso_copia())
-        return {
-            "usuario": username,
-            "password": password_cifrada,
-            "mensaje": "Solicitud en proceso. Recibirá notificación cuando esté lista.",
-            "vigencia": vigencia
-        }
+                    info_final = {
+                        "usuario": username,
+                        "password": password_cifrada,
+                        "mensaje": f"Listo, tiene {vigencia} días para hacer la descarga.",
+                        "vigencia": vigencia
+                    }
+                    self.db.actualizar_estado(id, "listo", info_final)
+                    logger.info("Solicitud %s lista para usuario %s", id, username)
+                except Exception as e:
+                    logger.error("Fallo en proceso_copia (%s): %s", id, e)
+                    self.db.actualizar_estado(id, "error", {**info_inicial, "mensaje": str(e)})
+                finally:
+                    await db_mysql.close()
+
+            # Ejecutar en background para producción (y tests harán polling)
+            asyncio.create_task(proceso_copia())
+            return {
+                "usuario": username,
+                "password": password_cifrada,
+                "mensaje": "Solicitud en proceso. Recibirá notificación cuando esté lista.",
+                "vigencia": vigencia
+            }
+        except Exception:
+            # Si falla antes de lanzar la tarea, cerrar la conexión
+            await db_mysql.close()
+            raise
