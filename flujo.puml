@@ -1,69 +1,55 @@
 @startuml
-!theme plain
-title Flujo Sistema TempoFTP
+skinparam Monochrome true
+skinparam shadowing false
 
-|#d1e0e0|API / Backend|
+title Flujo de Trabajo - Sistema tempoftp
+
 start
-:Recibir POST /tmpftp;
-if (¿Vigencia definida?) then (no)
-    :Set Vigencia = 5;
-endif
 
-|#ffe6cc|Base de Datos (SQLite)|
-:INSERT solicitud;
-:UPDATE Estado = "recibido";
+:Recepción de solicitud (POST /tmpftp);
+note right
+  Datos: usuario, id, ruta, vigencia
+end note
 
-|#d1e0e0|API / Backend|
-:Preparar entorno (mkdir, permisos);
+:Establecer estado: **recibido**;
+:Validar y registrar en SQLite;
 
-if (¿Ruta es Local?) then (No, es remota)
-    :Verificar espacio en disco;
-    if (Espacio suficiente?) then (Sí)
-        |#e6ffe6|Sistema (Async Worker)|
-        :Ejecutar rsync (background);
-        |#ffe6cc|Base de Datos (SQLite)|
-        :UPDATE Estado = "trasladando";
-        |#e6ffe6|Sistema (Async Worker)|
-        :Esperar fin de rsync;
-        if (Exit Code 0?) then (Sí)
-             |#ffe6cc|Base de Datos (SQLite)|
-             :UPDATE Estado = "trasladado";
-        else (No)
-             :UPDATE Estado = "error";
-             stop
+partition "Preparación" {
+    :Preparar directorio y permisos;
+    if (¿La ruta es local?) then (no)
+        :Verificar espacio disponible;
+        :Estado: **preparando**;
+        
+        partition "Proceso Asíncrono (rsync)" {
+            :Ejecutar rsync en segundo plano;
+            :Estado: **trasladando**;
+            if (¿Rsync exitoso?) then (sí)
+                :Estado: **trasladado**;
+            else (error)
+                :Estado: **error**;
+                stop
+            endif
+        }
+    else (sí)
+        if (¿Ruta existe?) then (no)
+            :Estado: **error**;
+            stop
         endif
-    else (No)
-        |#ffe6cc|Base de Datos (SQLite)|
-        :UPDATE Estado = "error";
-        stop
     endif
-else (Sí, es local)
-    |API / Backend|
-    if (¿Directorio existe?) then (Sí)
-         |#ffe6cc|Base de Datos (SQLite)|
-         :UPDATE Estado = "trasladado";
-    else (No)
-         :UPDATE Estado = "error";
-         stop
-    endif
-endif
+}
 
-|#d1e0e0|API / Backend|
-:Generar password;
-:Cifrar con Argon2;
+partition "Activación FTP" {
+    :Crear usuario en MySQL (Pure-FTPd);
+    note right: Contraseña cifrada con Argon2
+    :Almacenar credenciales en SQLite;
+    :Estado: **ready**;
+}
 
-|#e6e6e6|MySQL (Pure-FTPd)|
-:INSERT usuario FTP;
+:Usuario consulta estado (GET /tmpftp/{id});
 
-|#ffe6cc|Base de Datos (SQLite)|
-:UPDATE Estado = "ready";
-:Guardar credenciales;
+-[dotted]->
+:Tarea programada (Vigencia expirada);
+:Eliminar usuario FTP y datos;
 
-|#e6ffe6|Sistema (Async Worker)|
-:Programar Cron (Borrado tras vigencia);
-
-|API / Backend|
-:Fin del proceso de alta;
 stop
 @enduml
-

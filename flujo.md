@@ -10,17 +10,21 @@ Sistema para crear cuentas temporales de usuario para descargar datos vía FTP u
 
 2. **Preparación y verificación**
    - Se prepara el entorno (creación de directorio, permisos).
-   - Si la ruta no es local, se verifica el espacio disponible.
-   - Estado pasa a `preparando` o en caso de que la ruta local no exista, `error`.
+   - Se determina si la ruta origen es local o remota.
+   - Si es remota, se verifica el espacio disponible en disco.
+   - Estado pasa a `preparando`.
 
-3. **Copia de datos (asíncrona)**
-   - Si la ruta no es local, se lanza un proceso en segundo plano que ejecuta rsync desde el servidor de almacenamiento.
-   - Dependiendo de los resultados del rsync asíncrono, el estado se actualiza progresivamente: `trasladando`, `error`, `trasladado`.
+3. **Procesamiento de datos (Copia o Enlace)**
+   - **Ruta remota**: Se lanza un proceso en segundo plano que ejecuta rsync desde el servidor de almacenamiento. El estado pasa a `traslado` durante la copia.
+   - **Ruta local**: Se crea un enlace simbólico en la carpeta del usuario apuntando a los datos locales.
+   - En caso de error, el estado pasa a `error`.
 
-4. **Creación de usuario FTP**
-   - Al finalizar la copia o verificada la ruta local, se crea el usuario en la base de datos MySQL de pure-ftp con la contraseña cifrada usando argon2.
+4. **Gestión de usuario FTP**
+   - Al finalizar la copia o el enlace, se verifica si el usuario ya existe en la base de datos MySQL.
+   - Si el usuario **ya existe**, se actualiza su contraseña (no se crea un nuevo registro).
+   - Si el usuario **no existe**, se crea el registro en la base de datos con la contraseña cifrada.
    - Se almacena el usuario y la contraseña cifrada en SQLite.
-   - Estado pasa a `ready`.
+   - Estado pasa a `listo`.
 
 5. **Consulta de estado**
    - El usuario puede consultar el estado y credenciales vía GET /tmpftp/{id}.

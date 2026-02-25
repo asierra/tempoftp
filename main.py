@@ -176,6 +176,8 @@ async def get_tmpftp_status(id: str, gestor=Depends(get_gestor)):
             # Mezclar stats en la respuesta principal o bajo una clave 'descargas'
             result["descargas"] = stats
         return JSONResponse(content=result, status_code=status.HTTP_200_OK)
+    elif st == "error":
+        return JSONResponse(content=result, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     return JSONResponse(content=result, status_code=status.HTTP_202_ACCEPTED, headers={"Retry-After": "10"})
 
 @app.delete("/tmpftp/{id}")
