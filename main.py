@@ -142,6 +142,8 @@ async def delete_tmpftp_request(id: str, gestor=Depends(get_gestor)):
         if result.get("status") == "not_found":
             raise HTTPException(status_code=404, detail="Solicitud no encontrada")
         return JSONResponse(content=result, status_code=status.HTTP_200_OK)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error eliminando solicitud {id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -154,6 +156,8 @@ async def delete_ftp_user(user: str, gestor=Depends(get_gestor)):
         if result.get("status") == "not_found":
             raise HTTPException(status_code=404, detail="Usuario no encontrado")
         return JSONResponse(content=result, status_code=status.HTTP_200_OK)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error eliminando usuario {user}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

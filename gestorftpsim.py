@@ -100,6 +100,10 @@ class GestorFTPsim(GestorFTPBase):
         logger.info("SIMULACRO: Eliminado usuario FTP %s y home dir.", usuario)
         return {"status": "deleted", "usuario": usuario}
 
+    async def obtener_estadisticas_descargas(self, usuario_ftp: str, consulta_id: str = None) -> dict:
+        """Simulacro: sin log real, retorna ceros."""
+        return {"total_descargas": 0, "ultima_descarga": None}
+
     async def bloquear_solicitud(self, id: str, razon: str = None, descargas: int = None) -> Dict[str, Any]:
         """Simulacro: bloquea la solicitud en SQLite sin tocar MySQL."""
         solicitud = self.db.obtener_solicitud(id)
