@@ -357,7 +357,10 @@ class GestorFTP(GestorFTPBase):
         path_filter = f"/{consulta_id}/" if consulta_id else None
 
         def _leer_log():
-            count = 0
+            # Sesión = combinación única de (IP, día).
+            # Múltiples archivos descargados desde la misma IP el mismo día = 1 sesión.
+            # Formato CLF: IP - USER [dd/Mon/yyyy:HH:mm:ss tz] "GET /path" 200 SIZE
+            sesiones = set()
             last_date = None
             try:
                 # errors='replace' para evitar fallos con caracteres extraños en nombres de archivo
@@ -370,19 +373,30 @@ class GestorFTP(GestorFTPBase):
                         # Si se especificó subdirectorio de consulta, filtrar por él
                         if path_filter and path_filter not in line:
                             continue
-                        
+
                         # Verificar que sea una descarga (GET) y exitosa (200)
                         # Formato CLF típico: IP - USER [DATE] "GET /path" 200 SIZE
-                        if '"GET ' in line and ' 200 ' in line:
-                            count += 1
-                            # Extraer fecha entre corchetes: [dd/Mon/yyyy:HH:mm:ss +xxxx]
-                            start = line.find('[')
-                            end = line.find(']')
-                            if start != -1 and end != -1:
-                                last_date = line[start+1:end]
+                        if '"GET ' not in line or ' 200 ' not in line:
+                            continue
+
+                        # Extraer IP (primer campo) y fecha completa entre corchetes
+                        parts = line.split()
+                        ip = parts[0] if parts else None
+
+                        start = line.find('[')
+                        end = line.find(']')
+                        if start == -1 or end == -1:
+                            continue
+                        timestamp = line[start+1:end]  # dd/Mon/yyyy:HH:mm:ss tz
+                        # Extraer solo la parte del día: dd/Mon/yyyy
+                        dia = timestamp.split(':')[0] if timestamp else None
+
+                        if ip and dia:
+                            sesiones.add((ip, dia))
+                            last_date = timestamp  # última línea que pasa los filtros
             except PermissionError:
                 logger.warning("No se puede leer %s. Verifique permisos (chmod 644).", log_path)
-            return count, last_date
+            return len(sesiones), last_date
 
         count, last_date = await asyncio.to_thread(_leer_log)
         return {"total_descargas": count, "ultima_descarga": last_date}
