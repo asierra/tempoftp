@@ -338,9 +338,11 @@ class GestorFTP(GestorFTPBase):
         self.db.eliminar_solicitud(id)
         return {"status": "deleted", "id": id}
 
-    async def obtener_estadisticas_descargas(self, usuario_ftp: str) -> Dict[str, Any]:
+    async def obtener_estadisticas_descargas(self, usuario_ftp: str, consulta_id: str = None) -> Dict[str, Any]:
         """
         Lee el log de transferencias para obtener un resumen de descargas del usuario.
+        Filtra por el subdirectorio específico de la consulta (consulta_id) para evitar
+        contar descargas de consultas anteriores del mismo usuario FTP.
         Retorna cantidad de archivos y fecha de la última descarga.
         """
         log_path = "/var/log/pure-ftpd/transfer.log"
@@ -348,6 +350,11 @@ class GestorFTP(GestorFTPBase):
         
         if not usuario_ftp or not os.path.exists(log_path):
             return stats
+
+        # El path en el log es /data/<usuario_ftp>/<consulta_id>/archivo
+        # Filtrar por subdirectorio específico de esta consulta evita contar
+        # descargas de consultas anteriores del mismo usuario FTP.
+        path_filter = f"/{consulta_id}/" if consulta_id else None
 
         def _leer_log():
             count = 0
@@ -358,6 +365,10 @@ class GestorFTP(GestorFTPBase):
                     for line in f:
                         # Filtro rápido: si la línea no tiene el usuario, saltar
                         if usuario_ftp not in line:
+                            continue
+
+                        # Si se especificó subdirectorio de consulta, filtrar por él
+                        if path_filter and path_filter not in line:
                             continue
                         
                         # Verificar que sea una descarga (GET) y exitosa (200)
