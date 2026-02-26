@@ -61,7 +61,7 @@ Inicia la creación de una cuenta FTP temporal. Esta es una operación asíncron
     "usuario": "test.user@example.com",
     "id": "proyecto_test_1",
     "ruta": "10.0.0.1:/data/source",
-    "vigencia": 5
+    "vigencia": 10
 }
 ```
 
@@ -69,7 +69,7 @@ Inicia la creación de una cuenta FTP temporal. Esta es una operación asíncron
 - `usuario`: Dirección de correo electrónico del usuario (string)
 - `id`: Identificador único del proyecto/solicitud (string)
 - `ruta`: Ruta remota en formato `host:/path` o `usuario@host:/path` (string)
-- `vigencia`: Número de días de validez de la cuenta FTP (integer)
+- `vigencia`: Número de días de validez de la cuenta FTP (integer, default: 10)
 
 **Respuesta exitosa (202 Accepted):**
 ```json
@@ -127,10 +127,18 @@ Consulta el estado de una solicitud de cuenta FTP temporal. Retorna información
     "status": "listo",
     "ftpuser": "ftp_testuser_xxxx",
     "password": "Abc123xyz...",
-    "vigencia": 5,
-    "mensaje": "Listo, tiene 5 días para hacer la descarga."
+    "vigencia": 10,
+    "mensaje": "Listo, tiene 10 días para hacer la descarga.",
+    "descargas": {
+        "total_descargas": 1,
+        "ultima_descarga": "26/Feb/2026:09:21:27 -0600"
+    }
 }
 ```
+
+El campo `descargas` contiene:
+- `total_descargas`: número de sesiones únicas de descarga (agrupadas por IP y día), contadas solo sobre los archivos de esta consulta.
+- `ultima_descarga`: timestamp del último GET exitoso registrado en el log de Pure-FTPd.
 
 **Respuesta de error (404 Not Found):**
 ```json
@@ -423,12 +431,12 @@ El cliente **descifra automáticamente la contraseña** si la variable de entorn
 ```bash
 # El cliente se encarga de descifrar el campo "password"
 $ python apiclient.py --get proyecto_test_1
-200 {'status': 'listo', 'usuario': 'ftp_test.user_abcd', 'password': 'cleartextpassword123', 'mensaje': 'Listo, tiene 5 días para hacer la descarga.', 'vigencia': 5}
+200 {'status': 'listo', 'usuario': 'ftp_test.user_abcd', 'password': 'cleartextpassword123', 'mensaje': 'Listo, tiene 10 días para hacer la descarga.', 'vigencia': 10}
 ```
 
 ## Cambios recientes importantes
 
-- **Flujo idempotente de usuario FTP:** Si el usuario FTP ya existe en MySQL, la API devuelve la contraseña cifrada (hash) almacenada, no genera una nueva. Solo se crea y almacena un password nuevo si el usuario no existe.
+- **Flujo idempotente de usuario FTP:** Si el usuario FTP ya existe en MySQL, se genera una nueva contraseña y se actualiza en MySQL. Si no existe, se crea el registro. En ambos casos la contraseña en claro nunca se almacena — solo el hash cifrado en SQLite.
 - **Validación estricta de ruta remota:** El campo `ruta` debe ser del tipo `host:/ruta` o `usuario@host:/ruta`. Cualquier otro formato será rechazado por la API.
 - **Ejemplos y tests:** Todos los ejemplos y pruebas deben usar rutas remotas válidas. Usar `...` como ruta ya no es aceptado.
-- **No se sobreescribe el password:** Si el usuario FTP ya existe, su password no se modifica ni se puede recuperar en claro, solo se retorna el hash cifrado.
+- **Password siempre renovado:** En cada solicitud se genera una contraseña nueva. Si el usuario ya existe en MySQL, se actualiza su contraseña. El password en claro nunca se persiste — solo el hash cifrado retornado por la API.
