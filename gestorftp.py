@@ -5,6 +5,7 @@ import asyncio
 import shutil
 import socket
 import logging
+from datetime import datetime, timezone
 from typing import Optional, Tuple, Dict, Any
 import aiomysql
 from cifrado import cifrar
@@ -84,6 +85,26 @@ class FTPDB_MySQL:
                 if (await cur.fetchone())[0] == 0:
                     return False
                 await cur.execute("DELETE FROM users WHERE User=%s", (user,))
+                return True
+
+    async def bloquear_usuario(self, user: str) -> bool:
+        """Deshabilita un usuario FTP poniendo Status=0. Retorna True si existía."""
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT COUNT(*) FROM users WHERE User=%s", (user,))
+                if (await cur.fetchone())[0] == 0:
+                    return False
+                await cur.execute("UPDATE users SET Status=0 WHERE User=%s", (user,))
+                return True
+
+    async def desbloquear_usuario(self, user: str) -> bool:
+        """Rehabilita un usuario FTP poniendo Status=1. Retorna True si existía."""
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT COUNT(*) FROM users WHERE User=%s", (user,))
+                if (await cur.fetchone())[0] == 0:
+                    return False
+                await cur.execute("UPDATE users SET Status=1 WHERE User=%s", (user,))
                 return True
 
     async def crear_usuario_ftp(self, user: str, password: str, homedir: str) -> None:
@@ -416,6 +437,79 @@ class GestorFTP(GestorFTPBase):
             return {"status": "deleted", "usuario": usuario}
         finally:
             await db_mysql.close()
+
+    async def bloquear_solicitud(self, id: str, razon: str = None, descargas: int = None) -> Dict[str, Any]:
+        """Bloquea el usuario FTP asociado a la solicitud sin eliminarlo.
+        Pone Status=0 en MySQL y registra el bloqueo en SQLite."""
+        solicitud = self.db.obtener_solicitud(id)
+        if not solicitud:
+            return {"status": "not_found", "mensaje": "Solicitud no encontrada"}
+
+        info = solicitud.get("info", {})
+        usuario = info.get("usuario")
+        if not usuario:
+            return {"status": "error", "mensaje": "La solicitud no tiene usuario FTP asociado"}
+
+        db_mysql = FTPDB_MySQL()
+        await db_mysql.connect()
+        try:
+            encontrado = await db_mysql.bloquear_usuario(usuario)
+        finally:
+            await db_mysql.close()
+
+        info_actualizada = {**info,
+            "bloqueado": True,
+            "razon_bloqueo": razon or "no especificada",
+            "timestamp_bloqueo": datetime.now(timezone.utc).isoformat(),
+        }
+        if descargas is not None:
+            info_actualizada["descargas_al_bloquear"] = descargas
+
+        self.db.actualizar_estado(id, "bloqueado", info_actualizada)
+        logger.info("Solicitud %s bloqueada (usuario=%s, razon=%s)", id, usuario, razon)
+
+        return {
+            "status": "bloqueado",
+            "id": id,
+            "usuario": usuario,
+            "razon": razon or "no especificada",
+            "en_mysql": encontrado,
+        }
+
+    async def desbloquear_solicitud(self, id: str) -> Dict[str, Any]:
+        """Reactiva el usuario FTP asociado a la solicitud.
+        Pone Status=1 en MySQL y restaura el estado 'listo' en SQLite."""
+        solicitud = self.db.obtener_solicitud(id)
+        if not solicitud:
+            return {"status": "not_found", "mensaje": "Solicitud no encontrada"}
+
+        if solicitud.get("estado") != "bloqueado":
+            return {"status": "error", "mensaje": f"La solicitud no está bloqueada (estado actual: '{solicitud.get('estado')}')"}
+
+        info = solicitud.get("info", {})
+        usuario = info.get("usuario")
+        if not usuario:
+            return {"status": "error", "mensaje": "La solicitud no tiene usuario FTP asociado"}
+
+        db_mysql = FTPDB_MySQL()
+        await db_mysql.connect()
+        try:
+            encontrado = await db_mysql.desbloquear_usuario(usuario)
+        finally:
+            await db_mysql.close()
+
+        info_actualizada = {k: v for k, v in info.items()
+                            if k not in ("bloqueado", "razon_bloqueo", "timestamp_bloqueo", "descargas_al_bloquear")}
+
+        self.db.actualizar_estado(id, "listo", info_actualizada)
+        logger.info("Solicitud %s desbloqueada (usuario=%s)", id, usuario)
+
+        return {
+            "status": "listo",
+            "id": id,
+            "usuario": usuario,
+            "en_mysql": encontrado,
+        }
 
     async def create_usertmp(self, id: str, email: str, ruta: str, vigencia: int) -> Dict[str, object]:
         # Validaciones iniciales

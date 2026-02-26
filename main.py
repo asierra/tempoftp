@@ -1,14 +1,11 @@
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Body, status
+from fastapi import FastAPI, HTTPException, Depends, Body, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
 import os
 import logging
 from functools import lru_cache
-from typing import Dict, Any
-import secrets
-import string
-import types
+from typing import Optional
 
 # --- Cargar variables de entorno desde .env para desarrollo ---
 from dotenv import load_dotenv
@@ -30,53 +27,6 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 app = FastAPI()
-
-# --- Placeholders to allow tests that monkeypatch these (Query Processor compatibility) ---
-db = None
-recover = None
-
-# Fallback in-memory store for /query endpoints if db is not monkeypatched
-_mem_store: Dict[str, Dict[str, Any]] = {}
-
-def _gen_id(n: int = 8) -> str:
-    alphabet = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(n))
-
-def _db_crear_consulta(consulta_id: str, query_dict: Dict[str, Any]) -> bool:
-    _mem_store[consulta_id] = {
-        "id": consulta_id,
-        "estado": "recibido",
-        "progreso": 0,
-        "mensaje": "recibido",
-        "query": query_dict,
-        "resultados": None,
-        "timestamp_actualizacion": None,
-    }
-    return True
-
-def _db_obtener_consulta(consulta_id: str) -> Dict[str, Any]:
-    return _mem_store.get(consulta_id)
-
-def _db_actualizar_estado(consulta_id: str, estado: str, progreso: int | None = None, mensaje: str | None = None) -> bool:
-    rec = _mem_store.get(consulta_id)
-    if not rec:
-        return False
-    rec["estado"] = estado
-    if progreso is not None:
-        rec["progreso"] = progreso
-    if mensaje is not None:
-        rec["mensaje"] = mensaje
-    return True
-
-def _db_guardar_resultados(consulta_id: str, resultados: Dict[str, Any], mensaje: str | None = None) -> bool:
-    rec = _mem_store.get(consulta_id)
-    if not rec:
-        return False
-    rec["resultados"] = resultados
-    rec["estado"] = "completado"
-    rec["progreso"] = 100
-    rec["mensaje"] = mensaje or "completado"
-    return True
 
 @lru_cache()
 def get_gestor():
@@ -105,6 +55,10 @@ class TmpFTPRequest(BaseModel):
     id: str # <string>
     ruta: str # <IP:path>
     vigencia: int = 10 # <num dias>
+
+class BloqueoRequest(BaseModel):
+    razon: Optional[str] = None
+    descargas: Optional[int] = None
 
 @app.get("/")
 async def get_status():
@@ -204,103 +158,39 @@ async def delete_ftp_user(user: str, gestor=Depends(get_gestor)):
         logger.error(f"Error eliminando usuario {user}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- Endpoints sugeridos aplicados ---
-# Se asume que existen en el entorno:
-# - _validate_and_prepare_request
-# - processor.procesar_request
-# - generar_id_consulta
-# - db.crear_consulta / db.obtener_consulta
-# - recover.procesar_consulta
-
-@app.post("/query")
-async def crear_solicitud(
-    background_tasks: BackgroundTasks,
-    request_data: Dict[str, Any] = Body(...),
-):
-    # Implementación mínima compatible con tests; sin validación estricta
+@app.post("/tmpftp/{id}/bloquear")
+async def bloquear_tmpftp(id: str, req: BloqueoRequest = Body(default=BloqueoRequest()), gestor=Depends(get_gestor)):
+    """Bloquea el usuario FTP de una solicitud sin eliminarlo (Status=0 en MySQL)."""
     try:
-        consulta_id = _gen_id()
-        query_dict = dict(request_data or {})
-        # Crear en DB o fallback
-        if db and hasattr(db, "crear_consulta"):
-            ok = db.crear_consulta(consulta_id, query_dict)
-            if not ok:
-                raise HTTPException(status_code=500, detail="Error almacenando consulta")
-        else:
-            _db_crear_consulta(consulta_id, query_dict)
-        # Encolar procesamiento si recover fue inyectado
-        if recover and hasattr(recover, "procesar_consulta"):
-            background_tasks.add_task(recover.procesar_consulta, consulta_id, query_dict)
-        else:
-            _db_actualizar_estado(consulta_id, "procesando", 10, "aceptado")
-        body = {"success": True, "consulta_id": consulta_id, "estado": "recibido"}
-        return JSONResponse(content=body, status_code=status.HTTP_202_ACCEPTED, headers={"Location": f"/query/{consulta_id}"})
+        result = await gestor.bloquear_solicitud(id, razon=req.razon, descargas=req.descargas)
+        st = result.get("status")
+        if st == "not_found":
+            raise HTTPException(status_code=404, detail="Solicitud no encontrada")
+        if st == "error":
+            raise HTTPException(status_code=400, detail=result.get("mensaje"))
+        return JSONResponse(content=result, status_code=status.HTTP_200_OK)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Error bloqueando solicitud {id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.post("/query/{consulta_id}/restart")
-async def reiniciar_consulta(consulta_id: str, background_tasks: BackgroundTasks):
-    consulta = db.obtener_consulta(consulta_id) if (db and hasattr(db, "obtener_consulta")) else _db_obtener_consulta(consulta_id)
-    if not consulta:
-        raise HTTPException(status_code=404, detail="Consulta no encontrada.")
-
-    if consulta.get("estado") not in ["procesando", "error", "completado"]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No se puede reiniciar una consulta en estado '{consulta.get('estado')}'. Solo 'procesando', 'error' o 'completado'."
-        )
-
-    if recover and hasattr(recover, "procesar_consulta"):
-        background_tasks.add_task(recover.procesar_consulta, consulta_id, consulta.get("query") or {})
-    else:
-        _db_actualizar_estado(consulta_id, "procesando", 10, "reenviada")
-
-    return JSONResponse(
-        content={"success": True, "message": f"La consulta '{consulta_id}' ha sido reenviada para su procesamiento."},
-        status_code=status.HTTP_202_ACCEPTED,
-        headers={"Location": f"/query/{consulta_id}"}
-    )
-
-
-@app.get("/query/{consulta_id}")
-async def obtener_consulta(
-    consulta_id: str,
-    resultados: bool = False,
-):
-    consulta = db.obtener_consulta(consulta_id) if (db and hasattr(db, "obtener_consulta")) else _db_obtener_consulta(consulta_id)
-    if not consulta:
-        raise HTTPException(status_code=404, detail="Consulta no encontrada")
-
-    estado = (consulta.get("estado") or "").lower()
-
-    if resultados and estado == "completado" and consulta.get("resultados"):
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={"consulta_id": consulta_id, "estado": "completado", "resultados": consulta["resultados"]},
-        )
-
-    resp = {
-        "consulta_id": consulta_id,
-        "estado": consulta.get("estado"),
-        "progreso": consulta.get("progreso"),
-        "mensaje": consulta.get("mensaje"),
-        "timestamp": consulta.get("timestamp_actualizacion"),
-    }
-
-    if estado == "completado":
-        res = consulta.get("resultados") or {}
-        fuentes = res.get("fuentes", {})
-        resp["total_archivos"] = res.get("total_archivos", 0)
-        resp["archivos_lustre"] = fuentes.get("lustre", {}).get("total", 0)
-        resp["archivos_s3"] = fuentes.get("s3", {}).get("total", 0)
-        return JSONResponse(status_code=status.HTTP_200_OK, content=resp)
-    elif estado in ("procesando", "recibido", "preparando", "recuperando-local", "s3-listado", "s3-descargando"):
-        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=resp, headers={"Retry-After": "10"})
-    elif estado == "error":
-        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=resp)
-    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=resp)
-
+@app.post("/tmpftp/{id}/desbloquear")
+async def desbloquear_tmpftp(id: str, gestor=Depends(get_gestor)):
+    """Reactiva el usuario FTP de una solicitud bloqueada (Status=1 en MySQL)."""
+    try:
+        result = await gestor.desbloquear_solicitud(id)
+        st = result.get("status")
+        if st == "not_found":
+            raise HTTPException(status_code=404, detail="Solicitud no encontrada")
+        if st == "error":
+            raise HTTPException(status_code=400, detail=result.get("mensaje"))
+        return JSONResponse(content=result, status_code=status.HTTP_200_OK)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error desbloqueando solicitud {id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=9043, log_level=os.getenv("TEMPOFTP_LOG_LEVEL", "info").lower())          

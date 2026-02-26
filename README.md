@@ -14,6 +14,7 @@ Este servicio, construido con FastAPI, expone una API para la creación de cuent
 - Manejo de solicitudes, almacenamiento temporal y eliminación automática por vigencia.
 - Uso de SQLite para registro de estados de cada solicitud.
 - Generación de contraseñas criptográficamente seguras.
+- Bloqueo y desbloqueo de usuarios FTP sin destruir la cuenta (campo `Status` en MySQL + registro de auditoría en SQLite).
 
 ## Documentación de la API
 
@@ -215,141 +216,84 @@ Elimina un usuario FTP virtual de la base de datos MySQL de Pure-FTPd y todo su 
 
 ---
 
-#### 7. Crear consulta de recuperación
-**POST /query**
+#### 7. Bloquear solicitud FTP
+**POST /tmpftp/{id}/bloquear**
 
-Crea una nueva consulta para procesar y recuperar archivos. Esta operación es asíncrona y retorna un ID de consulta que puede ser usado para verificar el progreso.
-
-**Cuerpo (JSON):**
-```json
-{
-    "parametro1": "valor1",
-    "parametro2": "valor2"
-}
-```
-
-**Respuesta exitosa (202 Accepted):**
-```json
-{
-    "success": true,
-    "consulta_id": "AbCdEfGh",
-    "estado": "recibido"
-}
-```
-
-**Headers de respuesta:**
-- `Location`: `/query/{consulta_id}` - URL para consultar el estado
-
-**Respuesta de error (400 Bad Request):**
-```json
-{
-    "detail": "Error en los parámetros de la solicitud"
-}
-```
-
----
-
-#### 8. Consultar estado de una consulta
-**GET /query/{consulta_id}**
-
-Obtiene el estado actual de una consulta de recuperación, incluyendo progreso, mensajes y resultados cuando está completa.
+Bloquea el usuario FTP asociado a la solicitud sin eliminarlo. Pone `Status=0` en MySQL (impide login) y registra el bloqueo con razón y timestamp en SQLite. El directorio y los datos permanecen intactos para una posible reactivación futura.
 
 **Parámetros de ruta:**
-- `consulta_id`: Identificador único de la consulta (string)
+- `id`: Identificador único de la solicitud (string)
 
-**Parámetros de query:**
-- `resultados`: (opcional, boolean) Si es `true` y la consulta está completa, retorna solo los resultados
-
-**Respuesta en progreso (202 Accepted):**
+**Cuerpo (JSON, opcional):**
 ```json
 {
-    "consulta_id": "AbCdEfGh",
-    "estado": "procesando",
-    "progreso": 45,
-    "mensaje": "Procesando archivos...",
-    "timestamp": "2026-02-21T10:30:00Z"
+    "razon": "exceso_descargas",
+    "descargas": 5
 }
 ```
 
-**Respuesta completada (200 OK):**
+**Campos opcionales:**
+- `razon`: Motivo del bloqueo (string, default: `"no especificada"`)
+- `descargas`: Número de descargas registradas al momento del bloqueo (integer)
+
+**Respuesta exitosa (200 OK):**
 ```json
 {
-    "consulta_id": "AbCdEfGh",
-    "estado": "completado",
-    "progreso": 100,
-    "mensaje": "Consulta completada exitosamente",
-    "timestamp": "2026-02-21T10:35:00Z",
-    "total_archivos": 150,
-    "archivos_lustre": 120,
-    "archivos_s3": 30
+    "status": "bloqueado",
+    "id": "proyecto_test_1",
+    "usuario": "ftp_testuser_xxxx",
+    "razon": "exceso_descargas",
+    "en_mysql": true
 }
 ```
 
-**Respuesta con solo resultados (200 OK, cuando `?resultados=true`):**
-```json
-{
-    "consulta_id": "AbCdEfGh",
-    "estado": "completado",
-    "resultados": {
-        "total_archivos": 150,
-        "fuentes": {
-            "lustre": {"total": 120},
-            "s3": {"total": 30}
-        }
-    }
-}
-```
+El campo `en_mysql` indica si el usuario fue encontrado y actualizado en la base de datos de Pure-FTPd.
 
 **Respuesta de error (404 Not Found):**
 ```json
 {
-    "detail": "Consulta no encontrada"
-}
-```
-
-**Respuesta de error (500 Internal Server Error):**
-```json
-{
-    "consulta_id": "AbCdEfGh",
-    "estado": "error",
-    "progreso": 60,
-    "mensaje": "Error al procesar archivos",
-    "timestamp": "2026-02-21T10:33:00Z"
-}
-```
-
----
-
-#### 9. Reiniciar una consulta
-**POST /query/{consulta_id}/restart**
-
-Reinicia el procesamiento de una consulta que está en estado `procesando`, `error` o `completado`. Útil para reintentar consultas fallidas o reprocesar consultas completadas.
-
-**Parámetros de ruta:**
-- `consulta_id`: Identificador único de la consulta (string)
-
-**Respuesta exitosa (202 Accepted):**
-```json
-{
-    "success": true,
-    "message": "La consulta 'AbCdEfGh' ha sido reenviada para su procesamiento."
-}
-```
-
-**Headers de respuesta:**
-- `Location`: `/query/{consulta_id}` - URL para consultar el estado
-
-**Respuesta de error (404 Not Found):**
-```json
-{
-    "detail": "Consulta no encontrada."
+    "detail": "Solicitud no encontrada"
 }
 ```
 
 **Respuesta de error (400 Bad Request):**
 ```json
 {
-    "detail": "No se puede reiniciar una consulta en estado 'recibido'. Solo 'procesando', 'error' o 'completado'."
+    "detail": "La solicitud no tiene usuario FTP asociado"
+}
+```
+
+---
+
+#### 8. Desbloquear solicitud FTP
+**POST /tmpftp/{id}/desbloquear**
+
+Reactiva el usuario FTP de una solicitud previamente bloqueada. Pone `Status=1` en MySQL y restaura el estado `listo` en SQLite, eliminando los campos de auditoría de bloqueo.
+
+**Parámetros de ruta:**
+- `id`: Identificador único de la solicitud (string)
+
+**Respuesta exitosa (200 OK):**
+```json
+{
+    "status": "listo",
+    "id": "proyecto_test_1",
+    "usuario": "ftp_testuser_xxxx",
+    "en_mysql": true
+}
+```
+
+**Respuesta de error (404 Not Found):**
+```json
+{
+    "detail": "Solicitud no encontrada"
+}
+```
+
+**Respuesta de error (400 Bad Request):**
+```json
+{
+    "detail": "La solicitud no está bloqueada (estado actual: 'listo')"
 }
 ```
 

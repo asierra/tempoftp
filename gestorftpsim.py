@@ -2,7 +2,8 @@ import os
 import random
 import time
 import logging
-from typing import Dict
+from datetime import datetime, timezone
+from typing import Dict, Any, Optional
 from cifrado import cifrar
 from gestorftpbase import GestorFTPBase
 from tmpftpdb import TMPFTPdb
@@ -98,3 +99,40 @@ class GestorFTPsim(GestorFTPBase):
     async def delete_ftp_user(self, usuario: str):
         logger.info("SIMULACRO: Eliminado usuario FTP %s y home dir.", usuario)
         return {"status": "deleted", "usuario": usuario}
+
+    async def bloquear_solicitud(self, id: str, razon: str = None, descargas: int = None) -> Dict[str, Any]:
+        """Simulacro: bloquea la solicitud en SQLite sin tocar MySQL."""
+        solicitud = self.db.obtener_solicitud(id)
+        if not solicitud:
+            return {"status": "not_found", "mensaje": "Solicitud no encontrada"}
+        info = solicitud.get("info", {})
+        usuario = info.get("usuario")
+        if not usuario:
+            return {"status": "error", "mensaje": "La solicitud no tiene usuario FTP asociado"}
+        info_actualizada = {**info,
+            "bloqueado": True,
+            "razon_bloqueo": razon or "no especificada",
+            "timestamp_bloqueo": datetime.now(timezone.utc).isoformat(),
+        }
+        if descargas is not None:
+            info_actualizada["descargas_al_bloquear"] = descargas
+        self.db.actualizar_estado(id, "bloqueado", info_actualizada)
+        logger.info("SIMULACRO: Solicitud %s bloqueada (usuario=%s, razon=%s)", id, usuario, razon)
+        return {"status": "bloqueado", "id": id, "usuario": usuario, "razon": razon or "no especificada", "en_mysql": False}
+
+    async def desbloquear_solicitud(self, id: str) -> Dict[str, Any]:
+        """Simulacro: reactiva la solicitud en SQLite sin tocar MySQL."""
+        solicitud = self.db.obtener_solicitud(id)
+        if not solicitud:
+            return {"status": "not_found", "mensaje": "Solicitud no encontrada"}
+        if solicitud.get("estado") != "bloqueado":
+            return {"status": "error", "mensaje": f"La solicitud no está bloqueada (estado actual: '{solicitud.get('estado')}')"}
+        info = solicitud.get("info", {})
+        usuario = info.get("usuario")
+        if not usuario:
+            return {"status": "error", "mensaje": "La solicitud no tiene usuario FTP asociado"}
+        info_actualizada = {k: v for k, v in info.items()
+                            if k not in ("bloqueado", "razon_bloqueo", "timestamp_bloqueo", "descargas_al_bloquear")}
+        self.db.actualizar_estado(id, "listo", info_actualizada)
+        logger.info("SIMULACRO: Solicitud %s desbloqueada (usuario=%s)", id, usuario)
+        return {"status": "listo", "id": id, "usuario": usuario, "en_mysql": False}
