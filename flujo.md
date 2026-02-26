@@ -4,7 +4,7 @@ Sistema para crear cuentas temporales de usuario para descargar datos vía FTP u
 
 1. **Recepción de solicitud**
    - El usuario envía una solicitud vía API (POST /tmpftp) con los datos `usuario`, `id` de la solicitud, `ruta` y opcionalmente `vigencia`.
-   - De no recibirse vigencia, se establece como 5.
+   - De no recibirse vigencia, se establece como 10.
    - Se establece el estado como `recibido`.
    - Se valida y registra la solicitud en SQLite con el estado.
 
@@ -28,6 +28,9 @@ Sistema para crear cuentas temporales de usuario para descargar datos vía FTP u
 
 5. **Consulta de estado**
    - El usuario puede consultar el estado y credenciales vía GET /tmpftp/{id}.
+   - Cuando el estado es `listo`, la respuesta incluye además el campo `descargas` con:
+     - `total_descargas`: número de sesiones de descarga únicas (agrupadas por IP y día), contadas solo sobre los archivos del directorio de esta consulta.
+     - `ultima_descarga`: timestamp del último GET exitoso registrado en el log de Pure-FTPd.
 
 6. **Eliminación automática**
    - Se programa la eliminación del usuario y los datos tras la vigencia indicada (cron o tarea programada).

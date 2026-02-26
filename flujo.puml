@@ -6,32 +6,27 @@ title Flujo de Trabajo - Sistema tempoftp
 
 start
 
-:Recepción de solicitud (POST /tmpftp);
-note right
-  Datos: usuario, id, ruta, vigencia
-end note
-
-:Establecer estado: **recibido**;
-:Validar y registrar en SQLite;
+partition "Inicial" {
+    :POST /tmpftp;
+    note right
+      usuario, id, ruta
+      vigencia (default: 10 días)
+    end note
+    :Validar y registrar en SQLite;
+    :Estado: **recibido**;
+}
 
 partition "Preparación" {
+    :Estado: **preparando**;
     :Preparar directorio y permisos;
-    if (¿La ruta es local?) then (no)
+    if (¿Ruta local?) then (sí)
+        :Crear enlace simbólico;
+    else (no)
         :Verificar espacio disponible;
-        :Estado: **preparando**;
-        
-        partition "Proceso Asíncrono (rsync)" {
-            :Ejecutar rsync en segundo plano;
-            :Estado: **trasladando**;
-            if (¿Rsync exitoso?) then (sí)
-                :Estado: **trasladado**;
-            else (error)
-                :Estado: **error**;
-                stop
-            endif
-        }
-    else (sí)
-        if (¿Ruta existe?) then (no)
+        :Estado: **traslado**;
+        :Ejecutar rsync;
+        if (¿Rsync exitoso?) then (sí)
+        else (error)
             :Estado: **error**;
             stop
         endif
@@ -39,17 +34,21 @@ partition "Preparación" {
 }
 
 partition "Activación FTP" {
-    :Crear usuario en MySQL (Pure-FTPd);
-    note right: Contraseña cifrada con Argon2
+    if (¿Usuario existe en MySQL?) then (sí)
+        :Actualizar contraseña;
+    else (no)
+        :Crear usuario en MySQL;
+    endif
     :Almacenar credenciales en SQLite;
-    :Estado: **ready**;
+    :Estado: **listo**;
+    :GET /tmpftp/{id};
+    note right
+      Credenciales FTP +
+      estadísticas de descargas
+    end note
+    -[dotted]->
+    :Vigencia expirada: eliminar usuario y datos;
 }
-
-:Usuario consulta estado (GET /tmpftp/{id});
-
--[dotted]->
-:Tarea programada (Vigencia expirada);
-:Eliminar usuario FTP y datos;
 
 stop
 @enduml

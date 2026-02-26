@@ -104,7 +104,7 @@ class TmpFTPRequest(BaseModel):
     usuario: str # <direccion email>
     id: str # <string>
     ruta: str # <IP:path>
-    vigencia: int # <num dias>
+    vigencia: int = 10 # <num dias>
 
 @app.get("/")
 async def get_status():
