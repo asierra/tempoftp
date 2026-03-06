@@ -1,5 +1,6 @@
 import os
 os.environ["TEMPOFTP_SIMULACRO"] = "1"
+os.environ["TEMPOFTP_RATE_LIMIT_POST"] = "1000/hour"  # sin restricción en tests
 import asyncio
 import pytest
 from fastapi.testclient import TestClient
@@ -36,7 +37,9 @@ def test_get_health(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert "space" in data
+    # El endpoint puede reportar espacio real o 'space_error' si /data no existe en este entorno
+    has_disk_info = "space_free_gb" in data or "space_error" in data
+    assert has_disk_info, f"Respuesta inesperada de /health: {data}"
     assert "ftpd" in data
     assert "database" in data
 

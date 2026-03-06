@@ -11,6 +11,9 @@
    id="svg72"
    sodipodi:docname="flujo.svg"
    inkscape:version="1.4 (e7c3feb100, 2024-10-09)"
+   inkscape:export-filename="flujo.png"
+   inkscape:export-xdpi="96"
+   inkscape:export-ydpi="96"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
    xmlns="http://www.w3.org/2000/svg"
@@ -29,8 +32,8 @@
      inkscape:deskcolor="#d1d1d1"
      showguides="true"
      inkscape:zoom="1.2360638"
-     inkscape:cx="665.41875"
-     inkscape:cy="333.72065"
+     inkscape:cx="666.22775"
+     inkscape:cy="333.72064"
      inkscape:window-width="2560"
      inkscape:window-height="1356"
      inkscape:window-x="0"
@@ -51,6 +54,16 @@
        position="1066.7703,552.68327"
        orientation="1,0"
        id="guide6"
+       inkscape:locked="false" />
+    <sodipodi:guide
+       position="391.69047,493.94475"
+       orientation="1,0"
+       id="guide1"
+       inkscape:locked="false" />
+    <sodipodi:guide
+       position="851.61581,488.15802"
+       orientation="1,0"
+       id="guide2"
        inkscape:locked="false" />
   </sodipodi:namedview>
   <title

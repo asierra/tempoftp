@@ -1,18 +1,30 @@
-from fastapi import FastAPI, HTTPException, Depends, Body, status
+from fastapi import FastAPI, HTTPException, Depends, Body, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
 import os
 import logging
+import uuid
+import shutil
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from typing import Optional
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # --- Cargar variables de entorno desde .env para desarrollo ---
 from dotenv import load_dotenv
 load_dotenv()
-# --- Línea de depuración para verificar .env ---
-print(f"--- DEBUG: Valor de TEMPOFTP_ENCRYPTION_KEY: {os.getenv('TEMPOFTP_ENCRYPTION_KEY')} ---")
-# ---------------------------------------------
+
+# --- Correlation ID context var ---
+_request_id_var: ContextVar[str] = ContextVar('request_id', default='-')
+
+class CorrelationIDFilter(logging.Filter):
+    def filter(self, record):
+        record.request_id = _request_id_var.get('-')
+        return True
 
 # --- Logging configuration ---
 LOG_LEVEL = os.getenv("TEMPOFTP_LOG_LEVEL", "INFO").upper()
@@ -22,11 +34,58 @@ except AttributeError:
     _numeric_level = logging.INFO
 logging.basicConfig(
     level=_numeric_level,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] %(message)s",
 )
+for _handler in logging.root.handlers:
+    _handler.addFilter(CorrelationIDFilter())
 
 logger = logging.getLogger(__name__)
-app = FastAPI()
+
+
+def validate_pureftpd_config():
+    """Verifica que MYSQLCrypt en pureftpd-mysql.conf coincida con el algoritmo usado en código."""
+    conf_path = os.getenv('PUREFTPD_MYSQL_CONF', '/etc/pure-ftpd/db/mysql.conf')
+    if not os.path.exists(conf_path):
+        logger.info(f"Archivo Pure-FTPd no encontrado ({conf_path}), omitiendo validación")
+        return
+    try:
+        with open(conf_path) as f:
+            for line in f:
+                if line.strip().startswith('MYSQLCrypt'):
+                    configured = line.split()[-1].lower()
+                    if configured != 'argon2':
+                        raise RuntimeError(
+                            f"MYSQLCrypt={configured} pero el código usa argon2. "
+                            f"Actualizar _hash_password() o pureftpd-mysql.conf"
+                        )
+    except PermissionError:
+        logger.warning(f"Sin permiso de lectura sobre {conf_path}, omitiendo validación")
+        return
+    logger.info("Configuración Pure-FTPd validada")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    validate_pureftpd_config()
+    yield
+
+
+limiter = Limiter(key_func=get_remote_address)
+app = FastAPI(lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    request_id = request.headers.get('X-Request-ID', str(uuid.uuid4()))
+    token = _request_id_var.set(request_id)
+    try:
+        response = await call_next(request)
+        response.headers['X-Request-ID'] = request_id
+        return response
+    finally:
+        _request_id_var.reset(token)
 
 @lru_cache()
 def get_gestor():
@@ -67,11 +126,25 @@ async def get_status():
 
 @app.get("/health")
 async def get_health():
-    # Consulta el estado del servicio y recursos
-    return {"status": "ok", "space": "20TB", "ftpd": "up", "database": "ok"}
+    data_path = os.getenv('TEMPOFTP_DATA_PATH', '/data')
+    try:
+        usage = shutil.disk_usage(data_path)
+        disk_info = {
+            "space_free_gb": round(usage.free / (1024**3), 2),
+            "space_total_gb": round(usage.total / (1024**3), 2),
+            "space_used_pct": round(usage.used / usage.total * 100, 1),
+        }
+    except (FileNotFoundError, PermissionError) as e:
+        logger.warning(f"No se pudo leer espacio en disco ({data_path}): {e}")
+        disk_info = {"space_error": "unavailable"}
+    return {"status": "ok", **disk_info, "ftpd": "up", "database": "ok"}
+
+_RATE_LIMIT_POST = os.getenv("TEMPOFTP_RATE_LIMIT_POST", "10/hour")
+
 
 @app.post("/tmpftp")
-async def create_tmpftp(req: TmpFTPRequest, gestor=Depends(get_gestor)):
+@limiter.limit(_RATE_LIMIT_POST)
+async def create_tmpftp(request: Request, req: TmpFTPRequest, gestor=Depends(get_gestor)):
     try:
         # El gestor puede devolver un dict con estado inmediato (ej. sim fuerza "ok").
         result = await gestor.create_usertmp(req.id, req.usuario, req.ruta, req.vigencia)
@@ -112,8 +185,8 @@ async def create_tmpftp(req: TmpFTPRequest, gestor=Depends(get_gestor)):
             headers={"Location": f"/tmpftp/{req.id}", "Retry-After": "10"}
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail={"id": req.id, "status": "error", "mensaje": str(e)})
         logger.error(f"Error al crear tmpftp para {req.id}: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail={"id": req.id, "status": "error", "mensaje": str(e)})
 
 @app.get("/tmpftp/{id}")
 async def get_tmpftp_status(id: str, gestor=Depends(get_gestor)):

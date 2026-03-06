@@ -15,6 +15,10 @@ Este servicio, construido con FastAPI, expone una API para la creación de cuent
 - Uso de SQLite para registro de estados de cada solicitud.
 - Generación de contraseñas criptográficamente seguras.
 - Bloqueo y desbloqueo de usuarios FTP sin destruir la cuenta (campo `Status` en MySQL + registro de auditoría en SQLite).
+- Rate limiting configurable en `POST /tmpftp` para proteger contra floods y abuso.
+- Correlation IDs (`X-Request-ID`) propagados en todos los logs y headers de respuesta para trazabilidad distribuida.
+- Validación de consistencia entre el algoritmo de hash del código y `MYSQLCrypt` de Pure-FTPd al arrancar el servicio.
+- Endpoint `/health` con métricas reales de espacio en disco.
 
 ## Documentación de la API
 
@@ -37,13 +41,25 @@ Consulta el estado actual del servicio para verificar que está activo.
 #### 2. Salud del servicio
 **GET /health**
 
-Consulta el estado del servicio y los recursos disponibles (espacio en disco, estado del servidor FTPd y base de datos).
+Consulta el estado del servicio y los recursos disponibles. El espacio se lee en tiempo real desde el sistema de archivos (`TEMPOFTP_DATA_PATH`).
 
-**Respuesta:**
+**Respuesta normal:**
 ```json
 {
     "status": "ok",
-    "space": "20TB",
+    "space_free_gb": 18432.5,
+    "space_total_gb": 20000.0,
+    "space_used_pct": 7.8,
+    "ftpd": "up",
+    "database": "ok"
+}
+```
+
+**Respuesta si la ruta de datos no es accesible:**
+```json
+{
+    "status": "ok",
+    "space_error": "unavailable",
     "ftpd": "up",
     "database": "ok"
 }
@@ -55,6 +71,8 @@ Consulta el estado del servicio y los recursos disponibles (espacio en disco, es
 **POST /tmpftp**
 
 Inicia la creación de una cuenta FTP temporal. Esta es una operación asíncrona. La API responde inmediatamente con un código `202 Accepted` para indicar que la solicitud ha sido aceptada y se está procesando en segundo plano. El cliente debe consultar el estado periódicamente usando el endpoint `GET /tmpftp/{id}`.
+
+> **Rate limiting:** máximo `10/hour` por IP por defecto (configurable con `TEMPOFTP_RATE_LIMIT_POST`). Superar el límite retorna `429 Too Many Requests`.
 
 **Cuerpo (JSON):**
 ```json
@@ -317,15 +335,18 @@ Reactiva el usuario FTP de una solicitud previamente bloqueada. Pone `Status=1` 
 El servicio se configura mediante variables de entorno.
 
 ### Variables de entorno (producción)
-- TEMPOFTP_ENCRYPTION_KEY: clave Fernet para cifrar/descifrar contraseñas (obligatoria).
-- RSYNC_SSH_USER: usuario SSH para du/rsync (default: lanotadm).
-- FTP_DB_HOST, FTP_DB_PORT, FTP_DB_USER, FTP_DB_PASS, FTP_DB_NAME: conexión MySQL de Pure-FTPd.
-- FTP_PASSWORD_FORMAT: 'md5' | 'cleartext' | 'crypt' (debe coincidir con MYSQLCrypt en pureftpd-mysql.conf).
-- FTP_CRYPT_SCHEME: si FTP_PASSWORD_FORMAT='crypt', uno de 'sha512_crypt' | 'sha256_crypt' | 'md5_crypt' | 'des_crypt'.
-- FTP_UID, FTP_GID: UID/GID del usuario FTP en Pure-FTPd (default 2001/2001).
-- DATA_OWNER_USER, DATA_OWNER_GROUP: propietario/grupo para /data/<usuario> (default: RSYNC_SSH_USER o lanotadm).
-- SKIP_CHOWN: '1' para omitir chown en /data (útil en contenedores sin permisos), default '0'.
-- TEMPOFTP_LOG_LEVEL: nivel de logging de la app (DEBUG, INFO, WARNING, ERROR). Default: INFO.
+- `TEMPOFTP_ENCRYPTION_KEY`: clave Fernet para cifrar/descifrar contraseñas (obligatoria).
+- `RSYNC_SSH_USER`: usuario SSH para du/rsync (default: lanotadm).
+- `FTP_DB_HOST`, `FTP_DB_PORT`, `FTP_DB_USER`, `FTP_DB_PASS`, `FTP_DB_NAME`: conexión MySQL de Pure-FTPd.
+- `FTP_PASSWORD_FORMAT`: `'md5'` | `'cleartext'` | `'crypt'` (debe coincidir con `MYSQLCrypt` en pureftpd-mysql.conf).
+- `FTP_CRYPT_SCHEME`: si `FTP_PASSWORD_FORMAT='crypt'`, uno de `'sha512_crypt'` | `'sha256_crypt'` | `'md5_crypt'` | `'des_crypt'`.
+- `FTP_UID`, `FTP_GID`: UID/GID del usuario FTP en Pure-FTPd (default 2001/2001).
+- `DATA_OWNER_USER`, `DATA_OWNER_GROUP`: propietario/grupo para `/data/<usuario>` (default: `RSYNC_SSH_USER` o lanotadm).
+- `SKIP_CHOWN`: `'1'` para omitir chown en `/data` (útil en contenedores sin permisos), default `'0'`.
+- `TEMPOFTP_LOG_LEVEL`: nivel de logging (DEBUG, INFO, WARNING, ERROR). Default: INFO.
+- `TEMPOFTP_DATA_PATH`: ruta que usa `/health` para medir espacio en disco. Default: `/data`.
+- `PUREFTPD_MYSQL_CONF`: ruta al archivo de configuración de Pure-FTPd. Default: `/etc/pure-ftpd/db/mysql.conf`. Si el proceso no tiene permiso de lectura, se omite la validación con un `WARNING`.
+- `TEMPOFTP_RATE_LIMIT_POST`: límite de llamadas a `POST /tmpftp` por IP. Default: `10/hour`. Formato de `slowapi`, ej: `50/hour`, `100/minute`.
 
 ### Variables de entorno (simulación)
 - TEMPOFTP_SIMULACRO=1: usa gestor simulado (sin MySQL ni rsync real).
@@ -349,7 +370,13 @@ Esta variable es **crítica** para la seguridad. Contiene la clave secreta utili
     ```
 
 ### Logging
-Puedes ajustar la verbosidad de logs con TEMPOFTP_LOG_LEVEL.
+Puedes ajustar la verbosidad de logs con `TEMPOFTP_LOG_LEVEL`.
+
+Todos los mensajes incluyen el `X-Request-ID` de la solicitud entre corchetes para facilitar el rastreo entre servicios:
+```
+2026-03-06 14:32:10 - main - INFO - [f3a9c1b2-...] create_usertmp usuario=user@mail.com
+2026-03-06 14:32:11 - main - ERROR - [f3a9c1b2-...] MySQL timeout
+```
 
 Ejemplo:
 ```bash
@@ -380,7 +407,10 @@ $ python apiclient.py --get proyecto_test_1
 
 ## Cambios recientes importantes
 
+- **Rate limiting:** `POST /tmpftp` acepta máximo 10 solicitudes por hora por IP. Configurable con `TEMPOFTP_RATE_LIMIT_POST`.
+- **Correlation IDs:** Todas las respuestas incluyen el header `X-Request-ID`. Si el cliente lo envía en la petición, se propaga; si no, se genera uno nuevo. Aparece en todos los logs para facilitar el diagnóstico cruzado entre servicios.
+- **Validación Pure-FTPd al arranque:** Al iniciar, el servicio verifica que `MYSQLCrypt` en `pureftpd-mysql.conf` sea `argon2`. Si hay mismatch, el servicio falla inmediatamente con un error claro. Si no tiene permiso de lectura, emite un `WARNING` y continúa.
+- **`/health` con datos reales:** El endpoint ya no devuelve `"space": "20TB"` hardcodeado. Lee el espacio real de `TEMPOFTP_DATA_PATH` (`/data` por defecto) con `shutil.disk_usage`.
 - **Flujo idempotente de usuario FTP:** Si el usuario FTP ya existe en MySQL, se genera una nueva contraseña y se actualiza en MySQL. Si no existe, se crea el registro. En ambos casos la contraseña en claro nunca se almacena — solo el hash cifrado en SQLite.
 - **Validación estricta de ruta remota:** El campo `ruta` debe ser del tipo `host:/ruta` o `usuario@host:/ruta`. Cualquier otro formato será rechazado por la API.
-- **Ejemplos y tests:** Todos los ejemplos y pruebas deben usar rutas remotas válidas. Usar `...` como ruta ya no es aceptado.
 - **Password siempre renovado:** En cada solicitud se genera una contraseña nueva. Si el usuario ya existe en MySQL, se actualiza su contraseña. El password en claro nunca se persiste — solo el hash cifrado retornado por la API.
