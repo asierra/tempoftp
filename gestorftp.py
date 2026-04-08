@@ -521,13 +521,20 @@ class GestorFTP(GestorFTPBase):
         db_mysql = FTPDB_MySQL()
         await db_mysql.connect()
         
-        password_claro = self.generate_password()
-        password_cifrada = cifrar(password_claro)
+        hash_existente = await db_mysql.obtener_password_hash(username)
+        ya_existe = hash_existente is not None
+
+        reuse_password = os.getenv("TEMPOFTP_REUSE_PASSWORD", "false").strip().lower() in ("1", "true", "yes")
+        password_cifrada_existente = self.db.obtener_password_cifrada_por_email(email) if (ya_existe and reuse_password) else None
+
+        if password_cifrada_existente and reuse_password and ya_existe:
+            password_claro = None  # no se renueva
+            password_cifrada = password_cifrada_existente
+        else:
+            password_claro = self.generate_password()
+            password_cifrada = cifrar(password_claro)
 
         try:
-            hash_existente = await db_mysql.obtener_password_hash(username)
-            ya_existe = hash_existente is not None
-            
             info_inicial = {
                 "usuario": username,
                 "password": password_cifrada,
@@ -571,6 +578,8 @@ class GestorFTP(GestorFTPBase):
                         else:
                             logger.info("Creando usuario FTP '%s' en MySQL.", username)
                             await db_mysql.crear_usuario_ftp(username, password_claro, f"/data/{username}")
+                    elif ya_existe:
+                        logger.info("Reutilizando password existente para usuario FTP '%s' (TEMPOFTP_REUSE_PASSWORD=true).", username)
 
                     info_final = {
                         "usuario": username,

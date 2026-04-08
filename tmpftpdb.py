@@ -81,6 +81,20 @@ class TMPFTPdb:
                 }
             return None
 
+    def obtener_password_cifrada_por_email(self, email: str) -> Optional[str]:
+        """Devuelve la contraseña cifrada más reciente de un email con estado 'listo'."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT info_json FROM solicitudes WHERE email = ? AND estado = 'listo' ORDER BY rowid DESC LIMIT 1",
+                (email,)
+            )
+            row = cursor.fetchone()
+            if row:
+                info = json.loads(row[0]) if row[0] else {}
+                return info.get('password')
+            return None
+
     def eliminar_solicitud(self, id: str):
         with self._get_conn() as conn:
             conn.execute('DELETE FROM solicitudes WHERE id = ?', (id,))
