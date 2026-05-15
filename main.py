@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, Body, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+import asyncio
 import uvicorn
 import os
 import logging
@@ -64,10 +65,30 @@ def validate_pureftpd_config():
     logger.info("Configuración Pure-FTPd validada")
 
 
+_CLEANUP_INTERVAL_HOURS = int(os.getenv("TEMPOFTP_CLEANUP_INTERVAL_HOURS", "24"))
+
+
+async def _cleanup_loop():
+    while True:
+        await asyncio.sleep(_CLEANUP_INTERVAL_HOURS * 3600)
+        try:
+            gestor = get_gestor()
+            deleted = await gestor.eliminar_expiradas()
+            logger.info("Cleanup FTP: %d solicitudes expiradas procesadas", deleted)
+        except Exception:
+            logger.exception("Error en cleanup de solicitudes FTP expiradas")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_pureftpd_config()
+    task = asyncio.create_task(_cleanup_loop())
     yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 limiter = Limiter(key_func=get_remote_address)
@@ -206,6 +227,16 @@ async def get_tmpftp_status(id: str, gestor=Depends(get_gestor)):
     elif st == "error":
         return JSONResponse(content=result, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     return JSONResponse(content=result, status_code=status.HTTP_202_ACCEPTED, headers={"Retry-After": "10"})
+
+@app.delete("/tmpftp/expired")
+async def cleanup_expired(gestor=Depends(get_gestor)):
+    """Procesa y elimina accesos FTP de solicitudes cuya vigencia ya venció."""
+    try:
+        count = await gestor.eliminar_expiradas()
+        return JSONResponse(content={"status": "ok", "expiradas": count}, status_code=200)
+    except Exception as e:
+        logger.error("Error en cleanup de expiradas: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/tmpftp/{id}")
 async def delete_tmpftp_request(id: str, gestor=Depends(get_gestor)):

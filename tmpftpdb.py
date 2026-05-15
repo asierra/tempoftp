@@ -99,3 +99,67 @@ class TMPFTPdb:
         with self._get_conn() as conn:
             conn.execute('DELETE FROM solicitudes WHERE id = ?', (id,))
             conn.commit()
+
+    def marcar_expirada(self, id: str) -> None:
+        """Marca una solicitud como expirada sin eliminar el registro histórico."""
+        with self._get_conn() as conn:
+            conn.execute("UPDATE solicitudes SET estado = 'expirado' WHERE id = ?", (id,))
+            conn.commit()
+
+    def obtener_expiradas(self, now_utc) -> list:
+        """
+        Devuelve solicitudes en estado 'listo' cuya vigencia ya venció.
+        Requiere que info_json contenga 'created_at' (ISO datetime) y 'vigencia' (días).
+        Las solicitudes sin 'created_at' se omiten silenciosamente.
+        """
+        from datetime import datetime, timezone, timedelta
+        result = []
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, email, ruta, estado, info_json FROM solicitudes WHERE estado = 'listo'"
+            )
+            rows = cursor.fetchall()
+        for row in rows:
+            info = json.loads(row[4]) if row[4] else {}
+            created_at_str = info.get('created_at')
+            vigencia = info.get('vigencia')
+            if not created_at_str or vigencia is None:
+                continue
+            try:
+                created_at = datetime.fromisoformat(created_at_str)
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                expiry = created_at + timedelta(days=int(vigencia))
+                if now_utc >= expiry:
+                    result.append({
+                        "id": row[0],
+                        "email": row[1],
+                        "ruta": row[2],
+                        "estado": row[3],
+                        "info": info,
+                    })
+            except (ValueError, TypeError):
+                continue
+        return result
+
+    def obtener_activas_por_usuario(self, usuario: str) -> list:
+        """
+        Devuelve solicitudes que NO están en estado terminal ('expirado', 'error')
+        y cuyo info_json.usuario coincide con el username FTP dado.
+        """
+        estados_terminales = ('expirado', 'error')
+        result = []
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, email, ruta, estado, info_json FROM solicitudes "
+                "WHERE estado NOT IN (?, ?)",
+                estados_terminales,
+            )
+            rows = cursor.fetchall()
+        for row in rows:
+            info = json.loads(row[4]) if row[4] else {}
+            if info.get('usuario') == usuario:
+                result.append({"id": row[0], "estado": row[3], "info": info})
+        return result

@@ -422,6 +422,67 @@ class GestorFTP(GestorFTPBase):
         count, last_date = await asyncio.to_thread(_leer_log)
         return {"total_descargas": count, "ultima_descarga": last_date}
 
+    async def eliminar_expiradas(self) -> int:
+        """
+        Procesa todas las solicitudes en estado 'listo' cuya vigencia venció:
+        - Borra el subdirectorio de la solicitud en /data/{usuario}/{id}
+        - Marca la solicitud como 'expirado' en SQLite (conserva el historial)
+        - Si el usuario FTP ya no tiene solicitudes activas: lo elimina de MySQL
+          y borra el home vacío de /data/{usuario}
+        Retorna el número de solicitudes procesadas.
+        """
+        now_utc = datetime.now(timezone.utc)
+        expiradas = self.db.obtener_expiradas(now_utc)
+        if not expiradas:
+            return 0
+
+        usernames_procesados: set = set()
+        count = 0
+
+        for solicitud in expiradas:
+            id_ = solicitud['id']
+            usuario = solicitud['info'].get('usuario')
+
+            # 1. Borrar subdirectorio de la solicitud
+            if usuario:
+                ruta_solicitud = f"/data/{usuario}/{id_}"
+                try:
+                    await asyncio.to_thread(self._borrar_directorio_seguro, ruta_solicitud)
+                except Exception as e:
+                    logger.warning("No se pudo borrar %s: %s", ruta_solicitud, e)
+
+            # 2. Marcar como expirada en SQLite
+            self.db.marcar_expirada(id_)
+            count += 1
+            logger.info("Solicitud %s marcada como expirada (usuario=%s)", id_, usuario)
+
+            if usuario:
+                usernames_procesados.add(usuario)
+
+        # 3. Para cada username sin solicitudes activas: eliminar de MySQL + home vacío
+        db_mysql = FTPDB_MySQL()
+        await db_mysql.connect()
+        try:
+            for usuario in usernames_procesados:
+                activas = self.db.obtener_activas_por_usuario(usuario)
+                if activas:
+                    logger.info("Usuario '%s' conserva %d solicitudes activas, no se elimina de MySQL", usuario, len(activas))
+                    continue
+                eliminado = await db_mysql.eliminar_usuario_ftp(usuario)
+                if eliminado:
+                    logger.info("Usuario FTP '%s' eliminado de MySQL", usuario)
+                ruta_home = f"/data/{usuario}"
+                try:
+                    if os.path.exists(ruta_home) and not os.listdir(ruta_home):
+                        await asyncio.to_thread(self._borrar_directorio_seguro, ruta_home)
+                        logger.info("Home vacío eliminado: %s", ruta_home)
+                except Exception as e:
+                    logger.warning("No se pudo eliminar home vacío %s: %s", ruta_home, e)
+        finally:
+            await db_mysql.close()
+
+        return count
+
     async def delete_ftp_user(self, usuario: str) -> Dict[str, str]:
         """Elimina un usuario FTP (MySQL) y todo su directorio home."""
         db_mysql = FTPDB_MySQL()
@@ -538,7 +599,8 @@ class GestorFTP(GestorFTPBase):
             info_inicial = {
                 "usuario": username,
                 "password": password_cifrada,
-                "vigencia": vigencia
+                "vigencia": vigencia,
+                "created_at": datetime.now(timezone.utc).isoformat(),
             }
             self.db.crear_solicitud(id, email, ruta, "recibido", {**info_inicial, 
                 "mensaje": "Solicitud en cola."})
