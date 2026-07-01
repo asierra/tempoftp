@@ -108,7 +108,12 @@ class TMPFTPdb:
 
     def obtener_expiradas(self, now_utc) -> list:
         """
-        Devuelve solicitudes en estado 'listo' cuya vigencia ya venció.
+        Devuelve solicitudes cuya vigencia ya venció y que deben limpiarse.
+        Incluye tanto 'listo' como 'bloqueado': una cuenta bloqueada sigue
+        ocupando espacio en /data y un usuario en MySQL, por lo que también debe
+        expirar por su vigencia original (el bloqueo solo deshabilita el login
+        antes de tiempo; no extiende ni cancela la retención). Dentro de la
+        vigencia sigue siendo reactivable vía desbloquear_solicitud.
         Requiere que info_json contenga 'created_at' (ISO datetime) y 'vigencia' (días).
         Las solicitudes sin 'created_at' se omiten silenciosamente.
         """
@@ -117,7 +122,8 @@ class TMPFTPdb:
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id, email, ruta, estado, info_json FROM solicitudes WHERE estado = 'listo'"
+                "SELECT id, email, ruta, estado, info_json FROM solicitudes "
+                "WHERE estado IN ('listo', 'bloqueado')"
             )
             rows = cursor.fetchall()
         for row in rows:

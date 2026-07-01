@@ -41,11 +41,14 @@ class GestorFTPsim(GestorFTPBase):
         homedir = f"/data/{username}"
         destino = f"{homedir}/{id}"
         info = {
-            "usuario": username,            
+            "usuario": username,
             "password_cifrada": password_cifrada, # Guardamos la contraseña cifrada para uso interno
             "ruta": ruta,
             "vigencia": vigencia,
-            "destino": destino
+            "destino": destino,
+            # created_at es obligatorio para eliminar_expiradas(); igual que en el
+            # gestor real, se fija al crear la solicitud y se propaga a 'listo'.
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         self.db.crear_solicitud(id, email, ruta, "recibido", {**info, "mensaje": "Solicitud en cola."})
         # Simulación de proceso

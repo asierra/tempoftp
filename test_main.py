@@ -213,13 +213,69 @@ def test_delete_user_success(client):
 
 def test_delete_user_not_found(client, monkeypatch):
     """Prueba borrar un usuario inexistente (simulando respuesta not_found del gestor)."""
-    
+
     # Monkeypatching el método en la clase para que devuelva not_found
     async def mock_delete_not_found(self, user):
         return {"status": "not_found", "mensaje": "Usuario no encontrado"}
-    
+
     monkeypatch.setattr(GestorFTPsim, "delete_ftp_user", mock_delete_not_found)
-    
+
     r = client.delete("/tmpftp/user/usuario_fantasma")
     assert r.status_code == 404
     assert r.json()["detail"] == "Usuario no encontrado"
+
+
+# ---------------------------------------------------------------------------
+# P1-2 + preservación de created_at: limpieza por vencimiento de solicitudes
+# ---------------------------------------------------------------------------
+
+def _mk_db():
+    from tmpftpdb import TMPFTPdb
+    return TMPFTPdb(db_path=':memory:')
+
+
+def test_obtener_expiradas_incluye_bloqueadas():
+    """P1-2: una solicitud 'bloqueado' vencida debe ser elegible para limpieza,
+    igual que una 'listo' vencida; una bloqueada aún vigente NO."""
+    from datetime import datetime, timezone, timedelta
+    db = _mk_db()
+    now = datetime.now(timezone.utc)
+    vencida = (now - timedelta(days=10)).isoformat()   # created hace 10d, vigencia 5 → vencida
+    vigente = (now - timedelta(days=1)).isoformat()    # created hace 1d, vigencia 5 → vigente
+
+    db.crear_solicitud("q_listo", "u@x.com", "h:/p", "listo",
+                       {"usuario": "ftp_u_x", "vigencia": 5, "created_at": vencida})
+    db.crear_solicitud("q_blk_vencida", "u@x.com", "h:/p", "bloqueado",
+                       {"usuario": "ftp_u_x", "vigencia": 5, "created_at": vencida})
+    db.crear_solicitud("q_blk_vigente", "u@x.com", "h:/p", "bloqueado",
+                       {"usuario": "ftp_u_x", "vigencia": 5, "created_at": vigente})
+
+    ids = {e["id"] for e in db.obtener_expiradas(now)}
+    assert "q_listo" in ids
+    assert "q_blk_vencida" in ids      # <-- corrección P1-2
+    assert "q_blk_vigente" not in ids
+
+
+def test_bloqueada_cuenta_como_activa_dentro_de_vigencia():
+    """Una solicitud 'bloqueado' sigue contando como activa (no terminal), de modo
+    que el usuario MySQL no se borra mientras siga reactivable dentro de vigencia."""
+    db = _mk_db()
+    db.crear_solicitud("q_blk", "u@x.com", "h:/p", "bloqueado",
+                       {"usuario": "ftp_u_x", "vigencia": 5})
+    activas = db.obtener_activas_por_usuario("ftp_u_x")
+    assert any(a["id"] == "q_blk" for a in activas)
+
+
+def test_listo_conserva_created_at(client, monkeypatch):
+    """Regresión: al pasar a 'listo' la info debe conservar created_at, sin el cual
+    eliminar_expiradas() nunca podría limpiar la solicitud."""
+    monkeypatch.setenv("TEMPOFTP_SIM_FORCE", "ok")
+    r = client.post("/tmpftp", json={
+        "usuario": "a@b.com", "id": "p_cat", "ruta": "10.0.0.1:/data/s", "vigencia": 5,
+    })
+    assert r.status_code == 200
+    gestor = get_gestor()
+    sol = gestor.db.obtener_solicitud("p_cat")
+    assert sol["estado"] == "listo"
+    assert "created_at" in sol["info"] and sol["info"]["created_at"]
+    monkeypatch.delenv("TEMPOFTP_SIM_FORCE", raising=False)

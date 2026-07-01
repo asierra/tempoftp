@@ -644,10 +644,13 @@ class GestorFTP(GestorFTPBase):
                         logger.info("Reutilizando password existente para usuario FTP '%s' (TEMPOFTP_REUSE_PASSWORD=true).", username)
 
                     info_final = {
-                        "usuario": username,
+                        # Conservar created_at (y vigencia) de info_inicial: son
+                        # obligatorios para que eliminar_expiradas() pueda limpiar
+                        # esta solicitud al vencer. Si no se propagan aquí, el
+                        # registro 'listo' pierde created_at y nunca expira.
+                        **info_inicial,
                         "password": password_cifrada,
                         "mensaje": f"Listo, tiene {vigencia} días para hacer la descarga.",
-                        "vigencia": vigencia
                     }
                     self.db.actualizar_estado(id, "listo", info_final)
                     logger.info("Solicitud %s lista para usuario %s", id, username)
