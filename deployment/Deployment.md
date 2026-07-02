@@ -251,6 +251,33 @@ sudo dnf install -y python3.11 python3.11-devel python3.11-pip mariadb-server pu
     sudo systemctl enable --now tempoftp.service
     ```
 
+6.  **Crear el timer de limpieza de solicitudes expiradas:**
+
+    La purga de solicitudes vencidas (usuario MySQL + datos en `/data` + registro
+    SQLite) corre como un timer `systemd` independiente del proceso de la API,
+    en vez de un loop dentro de la app. Esto es intencional: un loop atado al
+    proceso de FastAPI se ejecutaría una vez **por cada worker** de uvicorn
+    (`--workers 4` en `tempoftp.service`), duplicando la limpieza tantas veces
+    como workers configurados. El timer garantiza exactamente una ejecución
+    por ciclo, sin importar el número de workers de la API.
+
+    Copia los archivos de `deployment/` al servidor:
+
+    ```bash
+    sudo cp deployment/tempoftp-cleanup.service /etc/systemd/system/
+    sudo cp deployment/tempoftp-cleanup.timer /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now tempoftp-cleanup.timer
+    ```
+
+    Por defecto corre cada 24 h (`OnUnitActiveSec=24h` en el `.timer`, contado
+    desde que termina la ejecución anterior — no se solapa). Para forzar una
+    corrida manual sin esperar al timer:
+
+    ```bash
+    sudo systemctl start tempoftp-cleanup.service
+    ```
+
 ---
 
 ## 5. Verificación Final
@@ -258,12 +285,14 @@ sudo dnf install -y python3.11 python3.11-devel python3.11-pip mariadb-server pu
 1.  **Verificar estado de los servicios:**
     ```bash
     sudo systemctl status tempoftp.service
+    sudo systemctl status tempoftp-cleanup.timer
     sudo systemctl status pure-ftpd.service
     ```
 
 2.  **Revisar logs:**
     ```bash
     sudo journalctl -u tempoftp.service -f
+    sudo journalctl -u tempoftp-cleanup.service -f
     sudo journalctl -u pure-ftpd.service -f
     ```
 

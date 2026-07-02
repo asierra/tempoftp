@@ -1,6 +1,31 @@
+import os
 import string
 import secrets
 import random
+
+
+def select_gestor():
+    """
+    Instancia el gestor apropiado (real o simulado) según variables de entorno.
+    Si TEMPOFTP_SIMULACRO está definida, respeta su valor (0/1, true/false). Si
+    no, en contexto de pytest usa el simulador por defecto.
+
+    Compartido entre `main.py` (get_gestor, la dependencia de FastAPI) y
+    `cleanup_expired.py` (script standalone de limpieza) para que ambos
+    apunten siempre al mismo backend sin duplicar el criterio de selección.
+    """
+    sim_env = os.getenv("TEMPOFTP_SIMULACRO")
+    if sim_env is not None:
+        use_sim = str(sim_env).strip().lower() in ("1", "true", "yes", "on")
+    else:
+        use_sim = bool(os.getenv("PYTEST_CURRENT_TEST"))
+
+    if use_sim:
+        from gestorftpsim import GestorFTPsim
+        return GestorFTPsim()
+    from gestorftp import GestorFTP
+    return GestorFTP()
+
 
 class GestorFTPBase:
     """

@@ -1,0 +1,22 @@
+[Unit]
+Description=TempoFTP — limpieza de solicitudes FTP temporales expiradas
+Documentation=file:/opt/tempoftp/ARQUITECTURA_REAL.md
+After=network.target mariadb.service
+
+[Service]
+Type=oneshot
+User=lanotadm
+Group=lanotadm
+WorkingDirectory=/opt/tempoftp
+Environment="PATH=/opt/tempoftp/venv/bin"
+EnvironmentFile=/opt/tempoftp/.env
+ExecStart=/opt/tempoftp/venv/bin/python cleanup_expired.py
+
+# Redirigir stdout/stderr a journald para consultar con:
+#   journalctl -u tempoftp-cleanup.service
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tempoftp-cleanup
+
+# Matar el proceso si tarda más de 5 minutos (evita zombis si MySQL/FS cuelga)
+TimeoutStartSec=300

@@ -1,0 +1,19 @@
+[Unit]
+Description=Ejecutar la limpieza de TempoFTP periódicamente
+Documentation=file:/opt/tempoftp/ARQUITECTURA_REAL.md
+
+[Timer]
+# Esperar 5 minutos tras el arranque del sistema antes de la primera ejecución
+OnBootSec=5min
+
+# Intervalo contado desde que el servicio TERMINA (no desde que empieza).
+# Garantiza que no haya ejecuciones solapadas aunque una corrida tarde más
+# del intervalo configurado. Por defecto una vez al día, como el loop que
+# reemplaza (TEMPOFTP_CLEANUP_INTERVAL_HOURS=24 por defecto).
+OnUnitActiveSec=24h
+
+# Activar el servicio asociado
+Unit=tempoftp-cleanup.service
+
+[Install]
+WantedBy=timers.target

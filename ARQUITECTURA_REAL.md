@@ -99,8 +99,17 @@ Este documento describe los pasos y componentes necesarios para implementar y pr
 ### 4.6 Ejecución de la API
 
 - Instalar dependencias Python: `pip install -r requirements.txt`
-- Ejecutar con un solo worker para evitar duplicación de tareas en background:
-   - `uvicorn main:app --host 0.0.0.0 --port 9043 --workers 1`
+- Ejecutar con el número de workers que soporte la carga esperada, p.ej.:
+   - `uvicorn main:app --host 0.0.0.0 --port 9043 --workers 4`
+- **Nota (resuelto, ver `AUDITORIA_2026-07.md` P0-1):** anteriormente se recomendaba
+  `--workers 1` porque la limpieza de solicitudes expiradas corría como un loop
+  dentro del proceso de la app (`_cleanup_loop` en `main.py`), que se ejecutaba
+  una vez **por worker**, duplicando el trabajo. Esa limpieza ahora es un script
+  standalone (`cleanup_expired.py`) disparado por un timer `systemd`
+  (`deployment/tempoftp-cleanup.service`/`.timer`), independiente del número de
+  workers de la API — ver `deployment/Deployment.md` §4.6. Queda pendiente WAL +
+  `busy_timeout` en `tmpftpdb.py` para la concurrencia general de SQLite entre
+  workers (P1-3), pero eso ya no está atado al número de workers elegido aquí.
 
 ## 5. Prueba de humo
 
@@ -130,7 +139,7 @@ Este documento describe los pasos y componentes necesarios para implementar y pr
 - Coherencia de UID/GID y propietario; si pure-ftpd usa otros valores, ajusta el INSERT y el chown.
 - Permisos: el proceso de la API debe poder hacer chown en `/data`.
 - Firewall: abrir puerto 9043 para la API y el rango pasivo de FTP.
-- Concurrencia: usar `--workers 1` mientras las tareas corren en el event loop.
+- Concurrencia: el número de workers ya no está limitado por la limpieza de expiradas (ver nota en §4.6); la copia de datos por solicitud corre en el event loop vía `asyncio.to_thread`, sin bloquear a otros workers.
 - Logs y diagnóstico: considerar logs por solicitud en el directorio de la solicitud.
 
 ## 6.1 Despliegue con systemd
@@ -152,6 +161,18 @@ Este documento describe los pasos y componentes necesarios para implementar y pr
    sudo systemctl start tempoftp
    sudo systemctl status tempoftp --no-pager
    ```
+
+4. Habilitar el timer de limpieza de solicitudes expiradas (independiente del servicio de la API):
+
+   - `deployment/tempoftp-cleanup.service` → `/etc/systemd/system/tempoftp-cleanup.service`
+   - `deployment/tempoftp-cleanup.timer` → `/etc/systemd/system/tempoftp-cleanup.timer`
+
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now tempoftp-cleanup.timer
+   ```
+
+   Ver detalle y justificación en `deployment/Deployment.md` §4.6.
 
 4. Logs del servicio:
 

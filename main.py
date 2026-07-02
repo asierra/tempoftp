@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Body, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import asyncio
 import uvicorn
 import os
 import logging
@@ -14,6 +13,8 @@ from typing import Optional
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+
+from gestorftpbase import select_gestor
 
 # --- Cargar variables de entorno desde .env para desarrollo ---
 from dotenv import load_dotenv
@@ -65,30 +66,31 @@ def validate_pureftpd_config():
     logger.info("Configuración Pure-FTPd validada")
 
 
-_CLEANUP_INTERVAL_HOURS = int(os.getenv("TEMPOFTP_CLEANUP_INTERVAL_HOURS", "24"))
+def validate_encryption_key():
+    """
+    Falla rápido al arrancar si TEMPOFTP_ENCRYPTION_KEY no está configurada
+    (obligatoria tanto para GestorFTP como para GestorFTPsim — ver P0-2).
+    Sin este chequeo, el servidor arranca "sano" (pasa /health) y el error solo
+    aparece en el primer request real que instancie un gestor, dejando la API
+    devolviendo 500 indefinidamente hasta reiniciar con la variable corregida.
+    """
+    import cifrado  # noqa: F401 — el import ya valida (y aborta) si falta la clave.
+    logger.info("TEMPOFTP_ENCRYPTION_KEY validada.")
 
 
-async def _cleanup_loop():
-    while True:
-        await asyncio.sleep(_CLEANUP_INTERVAL_HOURS * 3600)
-        try:
-            gestor = get_gestor()
-            deleted = await gestor.eliminar_expiradas()
-            logger.info("Cleanup FTP: %d solicitudes expiradas procesadas", deleted)
-        except Exception:
-            logger.exception("Error en cleanup de solicitudes FTP expiradas")
+# La limpieza de solicitudes FTP expiradas (antes un loop en proceso aquí) se
+# ejecuta ahora como script standalone (cleanup_expired.py) disparado por
+# deployment/tempoftp-cleanup.timer. Un loop atado al lifespan de la app se
+# ejecutaba una vez POR WORKER de uvicorn, duplicando el trabajo de limpieza
+# (y las escrituras a SQLite/MySQL) tantas veces como --workers configurados.
+# Ver AUDITORIA_2026-07.md, P0-1.
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_pureftpd_config()
-    task = asyncio.create_task(_cleanup_loop())
+    validate_encryption_key()
     yield
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
 
 
 limiter = Limiter(key_func=get_remote_address)
@@ -111,23 +113,11 @@ async def correlation_id_middleware(request: Request, call_next):
 @lru_cache()
 def get_gestor():
     """
-    Función de dependencia que instancia el gestor apropiado (real o simulado)
-    basado en variables de entorno. Si TEMPOFTP_SIMULACRO está definido,
-    respeta su valor (0/1, true/false). Si no, en contexto de pytest usa el
-    simulador por defecto.
+    Función de dependencia (FastAPI) que instancia el gestor apropiado.
+    Delega en gestorftpbase.select_gestor() para compartir el criterio de
+    selección con cleanup_expired.py — ver docstring de select_gestor().
     """
-    sim_env = os.getenv("TEMPOFTP_SIMULACRO")
-    if sim_env is not None:
-        val = str(sim_env).strip().lower()
-        use_sim = val in ("1", "true", "yes", "on")
-    else:
-        use_sim = bool(os.getenv("PYTEST_CURRENT_TEST"))
-
-    if use_sim:
-        from gestorftpsim import GestorFTPsim
-        return GestorFTPsim()
-    from gestorftp import GestorFTP
-    return GestorFTP()
+    return select_gestor()
 
 
 class TmpFTPRequest(BaseModel):

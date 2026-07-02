@@ -1,16 +1,20 @@
 import os
 os.environ["TEMPOFTP_SIMULACRO"] = "1"
 os.environ["TEMPOFTP_RATE_LIMIT_POST"] = "1000/hour"  # sin restricción en tests
+
+# cifrado.py ahora aborta si falta TEMPOFTP_ENCRYPTION_KEY (P0-2) — hay que
+# fijarla ANTES de cualquier import que cargue ese módulo, directa o
+# transitivamente (main -> ... -> gestorftp/gestorftpsim -> cifrado).
+from cryptography.fernet import Fernet
+os.environ.setdefault("TEMPOFTP_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
 import asyncio
 import pytest
 from fastapi.testclient import TestClient
 from main import app, get_gestor
-from cifrado import descifrar, ENCRYPTION_KEY
+from cifrado import descifrar
 from gestorftp import GestorFTP
 from gestorftpsim import GestorFTPsim
-
-# Asegurarnos de que las pruebas usen la misma clave de cifrado
-os.environ["TEMPOFTP_ENCRYPTION_KEY"] = ENCRYPTION_KEY
 
 @pytest.fixture
 def client():
@@ -24,6 +28,18 @@ def client():
         gestor_actual._reiniciar_db_para_test()
     with TestClient(app) as c:
         yield c
+
+def test_lifespan_valida_encryption_key_al_arrancar(monkeypatch):
+    """P0-2: el lifespan debe invocar validate_encryption_key() al arrancar,
+    para fallar rápido si falta TEMPOFTP_ENCRYPTION_KEY en vez de recién en el
+    primer request real que instancie un gestor (ver test_cifrado.py para el
+    comportamiento de la validación en sí)."""
+    import main as main_module
+    calls = []
+    monkeypatch.setattr(main_module, "validate_encryption_key", lambda: calls.append(1))
+    with TestClient(main_module.app):
+        pass
+    assert calls == [1]
 
 def test_get_status(client):
     """Prueba que el endpoint de estado base funciona correctamente."""
