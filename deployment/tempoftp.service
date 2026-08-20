@@ -6,9 +6,9 @@ After=network.target
 User=lanotadm
 Group=lanotadm
 WorkingDirectory=/opt/tempoftp
-Environment="PATH=/opt/tempoftp/venv/bin"
+Environment="PATH=/opt/tempoftp/.venv/bin"
 EnvironmentFile=/opt/tempoftp/.env
-ExecStart=/opt/tempoftp/venv/bin/uvicorn main:app --workers 4 --host 127.0.0.1 --port 8000 --proxy-headers
+ExecStart=/opt/tempoftp/.venv/bin/uvicorn main:app --workers 4 --host 127.0.0.1 --port 8000 --proxy-headers
 Restart=always
 
 [Install]

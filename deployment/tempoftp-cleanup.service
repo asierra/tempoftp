@@ -8,9 +8,9 @@ Type=oneshot
 User=lanotadm
 Group=lanotadm
 WorkingDirectory=/opt/tempoftp
-Environment="PATH=/opt/tempoftp/venv/bin"
+Environment="PATH=/opt/tempoftp/.venv/bin"
 EnvironmentFile=/opt/tempoftp/.env
-ExecStart=/opt/tempoftp/venv/bin/python cleanup_expired.py
+ExecStart=/opt/tempoftp/.venv/bin/python cleanup_expired.py
 
 # Redirigir stdout/stderr a journald para consultar con:
 #   journalctl -u tempoftp-cleanup.service

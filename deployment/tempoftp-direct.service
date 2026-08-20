@@ -6,10 +6,10 @@ After=network.target
 User=lanotadm
 Group=lanotadm
 WorkingDirectory=/opt/tempoftp
-Environment="PATH=/opt/tempoftp/venv/bin"
+Environment="PATH=/opt/tempoftp/.venv/bin"
 EnvironmentFile=/opt/tempoftp/.env
 # Reemplaza 172.16.X.X por la IP real obtenida con 'ip addr' (ej. 172.16.10.5)
-ExecStart=/opt/tempoftp/venv/bin/uvicorn main:app --workers 4 --host 172.16.X.X --port 9043
+ExecStart=/opt/tempoftp/.venv/bin/uvicorn main:app --workers 4 --host 172.16.X.X --port 9043
 Restart=always
 
 [Install]

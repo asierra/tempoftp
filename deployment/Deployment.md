@@ -177,8 +177,8 @@ sudo dnf install -y python3.11 python3.11-devel python3.11-pip mariadb-server pu
 2.  **Crear entorno virtual e instalar dependencias:**
 
     ```bash
-    python3.11 -m venv venv
-    source venv/bin/activate
+    python3.11 -m venv .venv
+    source .venv/bin/activate
     pip install -r requirements.txt 
     # Asumiendo que tienes un requirements.txt con fastapi, uvicorn, aiomysql, passlib, cryptography, etc.
     ```
@@ -237,7 +237,7 @@ sudo dnf install -y python3.11 python3.11-devel python3.11-pip mariadb-server pu
     Group=lanotadm
     WorkingDirectory=/opt/tempoftp
     EnvironmentFile=/opt/tempoftp/.env
-    ExecStart=/opt/tempoftp/venv/bin/uvicorn main:app --host 0.0.0.0 --port 9043
+    ExecStart=/opt/tempoftp/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 9043
     Restart=always
 
     [Install]

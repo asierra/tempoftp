@@ -85,8 +85,8 @@ sudo dnf install -y python3.11 python3.11-devel python3.11-pip mariadb-server pu
 
 2.  **Entorno Virtual:**
     ```bash
-    python3.11 -m venv venv
-    source venv/bin/activate
+    python3.11 -m venv .venv
+    source .venv/bin/activate
     pip install -r requirements.txt
     ```
 
@@ -112,7 +112,7 @@ Esta opción expone la API directamente en el puerto 9043. Útil para redes inte
     WorkingDirectory=/opt/tempoftp
     EnvironmentFile=/opt/tempoftp/.env
     # Escucha en 0.0.0.0 para acceso externo directo
-    ExecStart=/opt/tempoftp/venv/bin/uvicorn main:app --host 0.0.0.0 --port 9043
+    ExecStart=/opt/tempoftp/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 9043
     Restart=always
 
     [Install]
@@ -138,7 +138,7 @@ Esta opción es más robusta y estándar para producción. Nginx maneja las peti
 
     ```ini
     # ... dentro de [Service] ...
-    ExecStart=/opt/tempoftp/venv/bin/uvicorn main:app --host 127.0.0.1 --port 9043
+    ExecStart=/opt/tempoftp/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 9043
     ```
     Reinicia el servicio: `sudo systemctl daemon-reload && sudo systemctl restart tempoftp`.
 
