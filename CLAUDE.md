@@ -33,7 +33,7 @@ No linter configured; no CI workflow in this repo (unlike its sibling `historic_
 ## Architecture
 
 ### Request lifecycle
-`main.py` → `get_gestor()` (a `lru_cache`d dependency picking `GestorFTP` (real) or `GestorFTPsim` (simulated) based on `TEMPOFTP_SIMULACRO`/pytest context) → `create_usertmp()` does the actual provisioning → state persisted in `tmpftpdb.py`'s SQLite (`solicitudes` table, states: `recibido`/`preparando`/`traslado`/`listo`/`error`/`bloqueado`/`expirado`) → client polls `GET /tmpftp/{id}`.
+`main.py` → `get_gestor()` (a `lru_cache`d dependency picking `GestorFTP` (real) or `GestorFTPsim` (simulated) based on `TEMPOFTP_SIMULACRO`/pytest context) → `create_usertmp()` does the actual provisioning → state persisted in `tmpftpdb.py`'s SQLite (`solicitudes` table, states: `recibido`/`preparando`/`traslado`/`listo`/`error`/`bloqueado`/`expirado`) → client polls `GET /tmpftp/{id}`. `GET /tmpftp` (added ago-2026) lists the whole table for reconciliation — never passwords, and it reports `sin_created_at`, the count of accounts that **can never expire** because `obtener_expiradas()` has no date to compute from. Without that listing an FTP account whose owner no longer claims it is undetectable: the only lookup was by id.
 
 `GestorFTPBase` (`gestorftpbase.py`) holds logic shared between real and simulated gestores: deterministic username generation (`ftp_<local>_<domain-label>` from the requester's email), password generation, and `get_status()` (reads `TMPFTPdb`, shapes the response). `GestorFTP` and `GestorFTPsim` both subclass it and are meant to be interchangeable from `main.py`'s perspective — when adding a new gestor method, add it to both (and to the base if the logic is truly shared).
 

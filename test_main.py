@@ -295,3 +295,74 @@ def test_listo_conserva_created_at(client, monkeypatch):
     assert sol["estado"] == "listo"
     assert "created_at" in sol["info"] and sol["info"]["created_at"]
     monkeypatch.delenv("TEMPOFTP_SIM_FORCE", raising=False)
+
+
+# --- GET /tmpftp: inventario para reconciliación (ago-2026) ---
+#
+# Antes sólo se podía preguntar por id, así que una cuenta que su dueño ya no
+# reclamara era indetectable. En tahan había seis así, más once accesos de enero
+# abiertos siete meses porque les faltaba created_at y eliminar_expiradas() no
+# podía verlos.
+
+def test_listado_vacio(client):
+    r = client.get("/tmpftp")
+    assert r.status_code == 200
+    assert r.json() == {"total": 0, "sin_created_at": 0, "solicitudes": []}
+
+
+def _crear(client, monkeypatch, id_, usuario="user@example.com"):
+    """El simulador necesita TEMPOFTP_SIM_FORCE=ok para un resultado determinista;
+    el campo del modelo es `usuario`, aunque en la base la columna sea `email`."""
+    monkeypatch.setenv("TEMPOFTP_SIM_FORCE", "ok")
+    r = client.post("/tmpftp", json={
+        "usuario": usuario, "id": id_, "ruta": "10.0.0.1:/datos/x", "vigencia": 5,
+    })
+    assert r.status_code == 200, r.text
+    return r
+
+
+def test_listado_incluye_lo_creado(client, monkeypatch):
+    _crear(client, monkeypatch, "LIST0001")
+    data = client.get("/tmpftp").json()
+    assert data["total"] == 1
+    fila = data["solicitudes"][0]
+    assert fila["id"] == "LIST0001"
+    assert fila["email"] == "user@example.com"
+
+
+def test_el_listado_nunca_devuelve_contrasenas(client, monkeypatch):
+    """Enumerar accesos es una cosa; enumerar credenciales, otra."""
+    _crear(client, monkeypatch, "LIST0002")
+    data = client.get("/tmpftp").json()
+    crudo = str(data)
+    assert "password" not in crudo
+    for fila in data["solicitudes"]:
+        assert set(fila) == {"id", "email", "ruta", "estado", "created_at", "vigencia"}
+
+
+def test_listado_filtra_por_estado(client, monkeypatch):
+    _crear(client, monkeypatch, "LIST0003")
+    todas = client.get("/tmpftp").json()["total"]
+    assert todas == 1
+    ninguna = client.get("/tmpftp", params={"estado": "expirado"}).json()
+    assert ninguna["total"] == 0
+
+
+def test_listado_respeta_el_limite(client, monkeypatch):
+    for i in range(3):
+        _crear(client, monkeypatch, f"LIMIT{i:03d}")
+    assert client.get("/tmpftp", params={"limite": 2}).json()["total"] == 2
+
+
+def test_listado_cuenta_las_que_no_pueden_vencer(client, monkeypatch):
+    """El dato que motivó el endpoint: sin created_at la cuenta no caduca nunca."""
+    _crear(client, monkeypatch, "LIST0004")
+    gestor = get_gestor()
+    sol = gestor.db.obtener_solicitud("LIST0004")
+    info = dict(sol["info"])
+    info.pop("created_at", None)
+    gestor.db.actualizar_estado("LIST0004", sol["estado"], info)
+
+    data = client.get("/tmpftp").json()
+    assert data["sin_created_at"] == 1
+    assert data["solicitudes"][0]["created_at"] is None

@@ -76,6 +76,11 @@ class GestorFTPBase:
         # Asume que la clase hija tiene un constructor que puede ser llamado de nuevo.
         self.__init__()
 
+    async def list_solicitudes(self, estado: str = None, limite: int = 500):
+        """Lista solicitudes para inventario y reconciliación. Se define aquí, como
+        get_status, para que el gestor real y el simulado se comporten igual."""
+        return self.db.listar_solicitudes(estado=estado, limite=limite)
+
     async def get_status(self, id: str):
         """Obtiene el estado de una solicitud desde la base de datos."""
         solicitud = self.db.obtener_solicitud(id)

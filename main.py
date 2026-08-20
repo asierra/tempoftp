@@ -199,6 +199,35 @@ async def create_tmpftp(request: Request, req: TmpFTPRequest, gestor=Depends(get
         logger.error(f"Error al crear tmpftp para {req.id}: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail={"id": req.id, "status": "error", "mensaje": str(e)})
 
+@app.get("/tmpftp")
+async def list_tmpftp(
+    estado: Optional[str] = None,
+    limite: int = 500,
+    gestor=Depends(get_gestor),
+):
+    """
+    📋 INVENTARIO: lista las solicitudes registradas, para reconciliación.
+
+    Existe porque hasta ago-2026 no había forma de saber qué cuentas FTP seguían
+    vivas: sólo se podía preguntar por id, así que una cuenta que su dueño ya no
+    reclamara era indetectable. En tahan aparecieron seis así, y once accesos de
+    enero que llevaban siete meses abiertos. Nada los habría encontrado.
+
+    **No devuelve contraseñas**, ni cifradas: sirve para enumerar accesos, no
+    credenciales. Para una concreta sigue estando GET /tmpftp/{id}.
+
+    `created_at: null` es el dato importante de cada fila: sin él
+    `eliminar_expiradas()` no puede calcular el vencimiento y la cuenta no
+    caduca nunca.
+    """
+    solicitudes = await gestor.list_solicitudes(estado=estado, limite=limite)
+    sin_vencimiento = [s["id"] for s in solicitudes if not s.get("created_at")]
+    return {
+        "total": len(solicitudes),
+        "sin_created_at": len(sin_vencimiento),
+        "solicitudes": solicitudes,
+    }
+
 @app.get("/tmpftp/{id}")
 async def get_tmpftp_status(id: str, gestor=Depends(get_gestor)):
     # Consulta el estado de la solicitud por ID

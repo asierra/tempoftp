@@ -168,6 +168,40 @@ El campo `descargas` contiene:
 
 ---
 
+#### 4-bis. Inventario de solicitudes
+**GET /tmpftp**
+
+Lista las solicitudes registradas, para inventario y reconciliación. Parámetros opcionales:
+`estado` (filtra por estado exacto) y `limite` (500 por defecto).
+
+Existe desde ago-2026. Hasta entonces sólo se podía preguntar por id, así que **una cuenta
+que su dueño ya no reclamara era indetectable**: en tahan aparecieron seis accesos huérfanos
+—consultas cerradas en Django cuyo FTP nunca se revocó— y once de enero que llevaban siete
+meses abiertos. Nada los habría encontrado.
+
+**No devuelve contraseñas, ni cifradas.** Enumerar accesos es una cosa y enumerar credenciales
+es otra; para una concreta sigue estando `GET /tmpftp/{id}`.
+
+`created_at: null` es el dato que hay que mirar en cada fila: sin él `eliminar_expiradas()`
+no puede calcular el vencimiento y **la cuenta no caduca nunca**. El campo `sin_created_at`
+de la respuesta lo cuenta directamente.
+
+**Respuesta:**
+```json
+{
+    "total": 2,
+    "sin_created_at": 1,
+    "solicitudes": [
+        {"id": "aB3xY9z1", "email": "user@example.com", "ruta": "10.0.0.1:/datos/x",
+         "estado": "listo", "created_at": "2026-08-19T20:32:13+00:00", "vigencia": 10},
+        {"id": "K7mQ2wLp", "email": "otro@example.com", "ruta": "10.0.0.1:/datos/y",
+         "estado": "listo", "created_at": null, "vigencia": 5}
+    ]
+}
+```
+
+---
+
 #### 5. Eliminar solicitud FTP temporal
 **DELETE /tmpftp/{id}**
 

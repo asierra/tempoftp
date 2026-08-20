@@ -81,6 +81,43 @@ class TMPFTPdb:
                 }
             return None
 
+    def listar_solicitudes(self, estado: Optional[str] = None, limite: int = 500) -> list:
+        """Lista solicitudes para inventario y reconciliación.
+
+        Devuelve sólo lo necesario para identificar y auditar una cuenta: id,
+        email, ruta, estado, created_at y vigencia. **Nunca la contraseña**, ni
+        siquiera cifrada: esto existe para poder enumerar accesos, y enumerar
+        credenciales es otra cosa. Quien necesite una concreta sigue pidiendo
+        /tmpftp/{id}.
+
+        created_at y vigencia viven dentro de info_json, no como columnas; salen
+        en None cuando faltan, que es justo el caso que interesa detectar: sin
+        created_at, obtener_expiradas() no las ve y la cuenta no vence nunca.
+        """
+        sql = 'SELECT id, email, ruta, estado, info_json FROM solicitudes'
+        params = []
+        if estado:
+            sql += ' WHERE estado = ?'
+            params.append(estado)
+        sql += ' ORDER BY rowid LIMIT ?'
+        params.append(int(limite))
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            solicitudes = []
+            for row in cursor.fetchall():
+                info = json.loads(row[4]) if row[4] else {}
+                solicitudes.append({
+                    "id": row[0],
+                    "email": row[1],
+                    "ruta": row[2],
+                    "estado": row[3],
+                    "created_at": info.get("created_at"),
+                    "vigencia": info.get("vigencia"),
+                })
+            return solicitudes
+
     def obtener_password_cifrada_por_email(self, email: str) -> Optional[str]:
         """Devuelve la contraseña cifrada más reciente de un email con estado 'listo'."""
         with self._get_conn() as conn:
